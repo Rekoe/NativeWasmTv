@@ -48,13 +48,15 @@
         android:roundIcon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:largeHeap="true"
+        android:resizeableActivity="true"
         android:theme="@style/AppTheme">
         <activity
             android:name=".MainActivity"
             android:banner="@drawable/tv_banner"
-            android:configChanges="keyboardHidden|orientation|screenSize"
+            android:configChanges="keyboardHidden|orientation|screenLayout|screenSize|smallestScreenSize|density|uiMode"
             android:launchMode="singleTask"
-            android:screenOrientation="landscape">
+            android:resizeableActivity="true"
+            android:screenOrientation="@integer/main_activity_screen_orientation">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
@@ -64,9 +66,9 @@
 
         <activity
             android:name=".ManagementActivity"
-            android:configChanges="keyboardHidden|orientation|screenSize|uiMode"
+            android:configChanges="keyboardHidden|orientation|screenLayout|screenSize|smallestScreenSize|density|uiMode"
             android:exported="false"
-            android:screenOrientation="fullSensor"
+            android:resizeableActivity="true"
             android:theme="@style/ManagementTheme" />
 
         <receiver

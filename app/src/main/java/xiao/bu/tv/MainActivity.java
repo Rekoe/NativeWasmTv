@@ -5268,6 +5268,14 @@ public final class MainActivity extends Activity {
     }
 
     private void applySystemUiVisibility() {
+        if (MultiWindowCompat.isInMultiWindowMode(this)) {
+            getWindow().clearFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN);
+            getWindow().addFlags(WindowManager.LayoutParams.FLAG_FORCE_NOT_FULLSCREEN);
+            getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_LAYOUT_STABLE);
+            return;
+        }
+        getWindow().clearFlags(WindowManager.LayoutParams.FLAG_FORCE_NOT_FULLSCREEN);
+        getWindow().addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN);
         int flags = View.SYSTEM_UI_FLAG_HIDE_NAVIGATION | View.SYSTEM_UI_FLAG_FULLSCREEN;
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
             flags |= View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY;
@@ -12368,43 +12376,92 @@ public final class MainActivity extends Activity {
 
     @Override
     protected void onPause() {
-        if (audioArtwork != null) audioArtwork.setActive(false);
         if (playbackSeekOverlay != null) playbackSeekOverlay.dismiss();
-        if (channelMediaSession != null) channelMediaSession.setActive(false);
         dispatchFlyMouseButtonUp(true);
-        if (videoView != null) {
-            videoView.onPause();
-        }
-        if (webSourceView != null) {
-            webSourceView.pausePage();
+        // Android 9 pauses the non-focused half of a split screen even though it
+        // remains visible. Keep rendering and WebView media alive until onStop.
+        if (!MultiWindowCompat.isInMultiWindowMode(this)) {
+            setWindowContentActive(false);
         }
         super.onPause();
     }
 
     @Override
+    protected void onStart() {
+        super.onStart();
+        if (MultiWindowCompat.isInMultiWindowMode(this)) {
+            setWindowContentActive(true);
+        }
+    }
+
+    @Override
+    protected void onStop() {
+        setWindowContentActive(false);
+        super.onStop();
+    }
+
+    @Override
     protected void onResume() {
         super.onResume();
-        if (audioArtwork != null) audioArtwork.setActive(true);
         if (Build.VERSION.SDK_INT >= 21) {
             if (channelMediaSession == null) {
                 channelMediaSession = new ChannelMediaSession(this,
                         new Runnable() { @Override public void run() { handleChannelMediaKey(-1); } },
                         new Runnable() { @Override public void run() { handleChannelMediaKey(1); } });
             }
-            channelMediaSession.setActive(true);
         }
         if (hasActivePlayer()) {
             requestPlaybackAudioFocus();
             applyPlaybackMuteState();
         }
-        if (videoView != null) {
-            videoView.onResume();
-        }
-        if (webSourceView != null) {
-            webSourceView.resumePage();
-        }
+        setWindowContentActive(true);
         refreshManagementAddress();
         applySystemUiVisibility();
+    }
+
+    private void setWindowContentActive(boolean active) {
+        if (audioArtwork != null) audioArtwork.setActive(active);
+        if (channelMediaSession != null) channelMediaSession.setActive(active);
+        if (videoView != null) {
+            if (active) videoView.onResume();
+            else videoView.onPause();
+        }
+        if (webSourceView != null) {
+            if (active) webSourceView.resumePage();
+            else webSourceView.pausePage();
+        }
+    }
+
+    @Override
+    public void onConfigurationChanged(Configuration configuration) {
+        super.onConfigurationChanged(configuration);
+        applySystemUiVisibility();
+        if (root != null) {
+            root.post(new Runnable() {
+                @Override public void run() {
+                    refreshUiScaleForViewport(root.getWidth(), root.getHeight(), true);
+                    configurePlaybackGestureExclusion();
+                    applySubtitleManualOffset();
+                }
+            });
+        }
+    }
+
+    @android.annotation.TargetApi(Build.VERSION_CODES.N)
+    @Override
+    public void onMultiWindowModeChanged(boolean inMultiWindowMode,
+            Configuration configuration) {
+        super.onMultiWindowModeChanged(inMultiWindowMode, configuration);
+        applySystemUiVisibility();
+        if (inMultiWindowMode) setWindowContentActive(true);
+        if (root != null) {
+            root.post(new Runnable() {
+                @Override public void run() {
+                    refreshUiScaleForViewport(root.getWidth(), root.getHeight(), true);
+                }
+            });
+        }
+        Log.i(TAG, "Multi-window mode changed active=" + inMultiWindowMode);
     }
 
     @Override

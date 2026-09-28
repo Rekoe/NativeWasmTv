@@ -75,9 +75,7 @@ public final class ManagementActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         sidebarDevice = usesSidebar(this);
-        setRequestedOrientation(sidebarDevice
-                ? ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
-                : ActivityInfo.SCREEN_ORIENTATION_PORTRAIT);
+        applyRequestedOrientation();
         openPages.put(this, Boolean.TRUE);
         applySystemUiVisibility();
         managementUrl = getIntent().getStringExtra(EXTRA_URL);
@@ -177,7 +175,10 @@ public final class ManagementActivity extends Activity {
             @Override
             public void onPageStarted(WebView view, String url, android.graphics.Bitmap favicon) {
                 if (view != webView) return;
-                if (!sidebarDevice) setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_PORTRAIT);
+                if (!sidebarDevice && !MultiWindowCompat.isInMultiWindowMode(
+                        ManagementActivity.this)) {
+                    setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_PORTRAIT);
+                }
                 if (isLocalControlPage(url)) currentPageUrl = url;
                 cancelLocalPointer();
                 // This bridge is only for our bundled touchpad, never a media website.
@@ -314,6 +315,16 @@ public final class ManagementActivity extends Activity {
     }
 
     private void applySystemUiVisibility() {
+        if (MultiWindowCompat.isInMultiWindowMode(this)) {
+            getWindow().clearFlags(android.view.WindowManager.LayoutParams.FLAG_FULLSCREEN);
+            getWindow().addFlags(
+                    android.view.WindowManager.LayoutParams.FLAG_FORCE_NOT_FULLSCREEN);
+            getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_LAYOUT_STABLE);
+            return;
+        }
+        getWindow().clearFlags(
+                android.view.WindowManager.LayoutParams.FLAG_FORCE_NOT_FULLSCREEN);
+        getWindow().addFlags(android.view.WindowManager.LayoutParams.FLAG_FULLSCREEN);
         int flags = View.SYSTEM_UI_FLAG_FULLSCREEN | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION;
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
             flags |= View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY;
@@ -543,6 +554,7 @@ public final class ManagementActivity extends Activity {
             runOnUiThread(new Runnable() {
                 @Override public void run() {
                     if (webView == null || isFinishing() || sidebarDevice
+                            || MultiWindowCompat.isInMultiWindowMode(ManagementActivity.this)
                             || !isLocalControlPage(webView.getUrl())
                             || !"/pages/flymouse.html".equals(Uri.parse(webView.getUrl()).getPath())) return;
                     setRequestedOrientation(landscape
@@ -853,6 +865,26 @@ public final class ManagementActivity extends Activity {
         super.onConfigurationChanged(configuration);
         readSystemTheme();
         refreshPageTheme();
+        applySystemUiVisibility();
+    }
+
+    @TargetApi(Build.VERSION_CODES.N)
+    @Override
+    public void onMultiWindowModeChanged(boolean inMultiWindowMode,
+            Configuration configuration) {
+        super.onMultiWindowModeChanged(inMultiWindowMode, configuration);
+        applyRequestedOrientation();
+        applySystemUiVisibility();
+    }
+
+    private void applyRequestedOrientation() {
+        if (MultiWindowCompat.isInMultiWindowMode(this)) {
+            setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED);
+            return;
+        }
+        setRequestedOrientation(sidebarDevice
+                ? ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+                : ActivityInfo.SCREEN_ORIENTATION_PORTRAIT);
     }
 
     private void cancelLocalPointer() {
