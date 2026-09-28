@@ -125,7 +125,28 @@ public final class ManagementActivity extends Activity {
     @SuppressLint("SetJavaScriptEnabled")
     private void createManagementWebView(String urlToLoad) {
         readSystemTheme();
-        webView = new WebView(this);
+        try {
+            webView = WebViewAvailability.create(() -> new WebView(this));
+        } catch (WebViewAvailability.UnavailableException error) {
+            pendingRendererRecovery = false;
+            android.util.Log.e("ManagementActivity", "WebView provider unavailable", error);
+            android.widget.LinearLayout panel = new android.widget.LinearLayout(this);
+            panel.setOrientation(android.widget.LinearLayout.VERTICAL);
+            panel.setGravity(Gravity.CENTER);
+            panel.setBackgroundColor(Color.rgb(247, 247, 248));
+            android.widget.TextView message = new android.widget.TextView(this);
+            message.setText(WebViewAvailability.MESSAGE + "\n也可在手机浏览器打开：\n" + managementUrl);
+            message.setTextColor(Color.DKGRAY);
+            message.setTextSize(18);
+            message.setGravity(Gravity.CENTER);
+            panel.addView(message);
+            android.widget.Button back = new android.widget.Button(this);
+            back.setText("返回");
+            back.setOnClickListener(view -> finish());
+            panel.addView(back);
+            setContentView(panel);
+            return;
+        }
         webView.setOverScrollMode(View.OVER_SCROLL_NEVER);
         webView.setBackgroundColor(systemDark ? Color.rgb(17, 20, 25) : Color.rgb(247, 247, 248));
         // Several Android TV/tablet WebView implementations render a black frame when
@@ -439,30 +460,49 @@ public final class ManagementActivity extends Activity {
     @Override
     public void onBackPressed() {
         if (webView != null && Build.VERSION.SDK_INT >= 19) {
-            webView.evaluateJavascript("(function(){return typeof window.mediaDismissSheet==='function' && window.mediaDismissSheet();})()",
+            final String backPageUrl = webView.getUrl();
+            webView.evaluateJavascript("(function(){return window.NtvNavigation ? NtvNavigation.back(true) : null;})()",
                     new ValueCallback<String>() {
                         @Override public void onReceiveValue(String value) {
-                            if (!"true".equals(value)) navigateBack();
+                            if (isFinishing() || webView == null
+                                    || !android.text.TextUtils.equals(backPageUrl, webView.getUrl())) return;
+                            if ("false".equals(value)) finish();
+                            else if (!"true".equals(value)) navigateBack();
                         }
                     });
             return;
         }
         if (webView != null) {
-            webView.loadUrl("javascript:(function(){if(!(typeof window.mediaDismissSheet==='function' && window.mediaDismissSheet()))NtvDevice.navigateBackAfterSheet();})()");
+            webView.loadUrl("javascript:(function(){var n=window.NtvNavigation;"
+                    + "if(!n)NtvDevice.navigateBackAfterSheet();"
+                    + "else if(!n.back(true))NtvDevice.closeManagement();})()");
             return;
         }
         navigateBack();
     }
 
     private void navigateBack() {
-        MainActivity owner=LocalPlayerRegistry.localInputOwner();
-        if(owner!=null && owner.backFromMultimedia())return;
-        if(owner!=null && owner.returnToRetainedWebPage()) {
-            finish();
-            return;
-        }
-        if (webView != null && webView.canGoBack()) {
-            webView.goBack();
+        // Fallback for unloaded/legacy pages. Never forward management Back to TV playback.
+        if (webView != null && isLocalControlPage(webView.getUrl())) {
+            String currentPath = Uri.parse(webView.getUrl()).getPath();
+            if ("/".equals(currentPath) || "/index.html".equals(currentPath)) {
+                finish();
+                return;
+            }
+            android.webkit.WebBackForwardList history = webView.copyBackForwardList();
+            int previous = history.getCurrentIndex() - 1;
+            if (previous >= 0) {
+                String url = history.getItemAtIndex(previous).getUrl();
+                String path = Uri.parse(url).getPath();
+                if (isLocalControlPage(url) && ("/".equals(path)
+                        || (path != null && path.endsWith(".html") && ControlSite.contains(path)))) {
+                    webView.goBack();
+                    return;
+                }
+            }
+            String home = Uri.parse(managementUrl).buildUpon().path("/index.html")
+                    .clearQuery().fragment(null).build().toString();
+            webView.loadUrl("javascript:location.replace(" + org.json.JSONObject.quote(home) + ")");
             return;
         }
         finish();
@@ -486,7 +526,7 @@ public final class ManagementActivity extends Activity {
             MainActivity owner = LocalPlayerRegistry.localInputOwner();
             if (owner == null || !owner.hasRetainedWebPlayback() || !isLocalControlPage(currentPageUrl)) return false;
             runOnUiThread(() -> {
-                if (owner.returnToRetainedWebPage() && true) finish();
+                if (owner.returnToRetainedWebPage() && owner.isFinishing()) finish();
             });
             return true;
         }
@@ -516,6 +556,16 @@ public final class ManagementActivity extends Activity {
             runOnUiThread(new Runnable() {
                 @Override public void run() {
                     if (webView != null && !isFinishing() && isLocalControlPage(webView.getUrl())) ManagementActivity.this.navigateBack();
+                }
+            });
+        }
+        @JavascriptInterface
+        public void closeManagement() {
+            runOnUiThread(new Runnable() {
+                @Override public void run() {
+                    if (webView == null || !isLocalControlPage(webView.getUrl())) return;
+                    String path = Uri.parse(webView.getUrl()).getPath();
+                    if ("/".equals(path) || "/index.html".equals(path)) finish();
                 }
             });
         }

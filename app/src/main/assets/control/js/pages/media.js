@@ -166,13 +166,13 @@ function openVideoRecorderPage() {
   }
   var ip = location.hostname,
     port = location.port || "9966";
-  location.href =
+  navigateTo(
     "/video-recorder.html?ip=" +
     encodeURIComponent(ip) +
     "&port=" +
     encodeURIComponent(port) +
     "&v=" +
-    Date.now();
+    Date.now());
 }
 
 var mediaPreviewKey = "", mediaPreviewCrop = { top: 0, bottom: 0 },
@@ -270,14 +270,18 @@ function mediaUpdatePreview(ready) {
 
 function mediaUpdateArtwork() {
   var image = document.getElementById("mediaArtwork");
-  var key = mediaState.audioOnly && mediaState.prepared ? mediaState.artworkKey || "" : "";
+  var webUrl = mediaState.webPageVisible ? mediaState.webArtworkUrl || "" : "";
+  if (!/^https?:\/\//i.test(webUrl) && !/^data:image\/(png|jpeg|gif|webp);base64,/i.test(webUrl)) webUrl = "";
+  var nativeKey = !mediaState.webPageVisible && mediaState.audioOnly && mediaState.prepared ? mediaState.artworkKey || "" : "";
+  var key = webUrl ? "web:" + (mediaState.webPageKey || "") + ":" + webUrl : nativeKey;
   if (image.artworkKey === key) return;
   image.artworkKey = key;
   image.hidden = true;
   if (!key) { image.src = ""; return; }
   image.onload = function () { if (image.artworkKey === key) image.hidden = false; };
-  image.onerror = function () { image.hidden = true; };
-  image.src = "/api/media/artwork?key=" + encodeURIComponent(key);
+  image.onerror = function () { if (image.artworkKey === key) image.hidden = true; };
+  image.referrerPolicy = "no-referrer";
+  image.src = webUrl || "/api/media/artwork?key=" + encodeURIComponent(nativeKey);
 }
 
 function mediaCloseShot(event) {
@@ -285,6 +289,7 @@ function mediaCloseShot(event) {
   if (event && event.target !== backdrop) return;
   backdrop.className = "media-sheet-backdrop";
   backdrop.setAttribute("aria-hidden", "true");
+  if (window.NtvNavigation) NtvNavigation.overlayClosed("media-shot");
 }
 
 function mediaCaptureScreenshot() {
@@ -331,6 +336,7 @@ function mediaCaptureScreenshot() {
     var backdrop = document.getElementById("mediaShotBackdrop");
     backdrop.className = "media-sheet-backdrop open";
     backdrop.setAttribute("aria-hidden", "false");
+    if (window.NtvNavigation) NtvNavigation.overlayOpen("media-shot", mediaCloseShot);
     save.click();
     finish();
   };
@@ -347,6 +353,7 @@ function mediaOpenSettings() {
   var backdrop = document.getElementById("mediaSettingsBackdrop");
   backdrop.className = "media-sheet-backdrop open";
   backdrop.setAttribute("aria-hidden", "false");
+  if (window.NtvNavigation) NtvNavigation.overlayOpen("media-settings", mediaCloseSettings);
 }
 
 function mediaOpenChannels() {
@@ -383,6 +390,7 @@ function mediaOpenSniffed() {
   var backdrop = document.getElementById("mediaSniffedBackdrop");
   backdrop.className = "media-sheet-backdrop open";
   backdrop.setAttribute("aria-hidden", "false");
+  if (window.NtvNavigation) NtvNavigation.overlayOpen("media-sniffed", mediaCloseSniffed);
   document.getElementById("mediaSniffedButton").setAttribute("aria-expanded", "true");
   backdrop.querySelector("button").focus();
 }
@@ -392,6 +400,7 @@ function mediaCloseSniffed(event) {
   if (event && event.target !== backdrop) return;
   backdrop.className = "media-sheet-backdrop";
   backdrop.setAttribute("aria-hidden", "true");
+  if (window.NtvNavigation) NtvNavigation.overlayClosed("media-sniffed");
   document.getElementById("mediaSniffedButton").setAttribute("aria-expanded", "false");
 }
 
@@ -400,6 +409,7 @@ function mediaCloseSettings(event) {
   if (event && event.target !== backdrop) return;
   backdrop.className = "media-sheet-backdrop";
   backdrop.setAttribute("aria-hidden", "true");
+  if (window.NtvNavigation) NtvNavigation.overlayClosed("media-settings");
 }
 
 function formatMediaTime(milliseconds) {
@@ -503,9 +513,11 @@ function renderMediaController(data) {
     favorite = mediaState.favorite === true,
     favoriteButton = document.getElementById("mediaFavorite");
   document.getElementById("mediaTitle").textContent = mediaState.name || "当前没有节目";
-  document.getElementById("mediaGroup").textContent = mediaState.group || "当前频道";
+  document.getElementById("mediaGroup").textContent = mediaState.webMedia
+    ? [mediaState.artist, mediaState.album].filter(function (v) { return !!v; }).join(" · ") || "网页媒体"
+    : mediaState.group || "当前频道";
   document.getElementById("mediaStatus").textContent = mediaState.webPageVisible
-    ? "正在浏览网页"
+    ? mediaState.webMediaError || (mediaState.webMedia ? (mediaState.playing ? "网页正在播放" : "网页媒体已暂停") : "正在浏览网页")
     : !available
     ? "等待电视开始播放"
     : !prepared
@@ -519,7 +531,9 @@ function renderMediaController(data) {
   favoriteButton.setAttribute("aria-label", favorite ? "取消收藏当前频道" : "收藏当前频道");
   favoriteButton.className = "media-favorite" + (favorite ? " selected" : "");
   favoriteButton.disabled = mediaState.favoriteAvailable === false;
-  document.getElementById("mediaLiveBadge").textContent = mediaState.webPageVisible ? "网页" : !available ? "等待播放" : !prepared ? "加载中" : !mediaState.playing ? "已暂停" : duration > 0 ? "播放中" : "直播中";
+  document.getElementById("mediaLiveBadge").textContent = mediaState.webPageVisible
+    ? (mediaState.webMedia ? (mediaState.playing ? "播放中" : "已暂停") : "网页")
+    : !available ? "等待播放" : !prepared ? "加载中" : !mediaState.playing ? "已暂停" : duration > 0 ? "播放中" : "直播中";
   var screenshotAvailable = available && prepared && !mediaState.audioOnly && mediaState.screenshotAvailable === true;
   var screenshotButton = document.getElementById("mediaScreenshot");
   screenshotButton.hidden = !screenshotAvailable;
@@ -540,12 +554,13 @@ function renderMediaController(data) {
   var toggle = document.getElementById("mediaToggle");
   toggle.className = "media-play-button" + (mediaState.playing ? " is-playing" : "");
   toggle.setAttribute("aria-label", mediaState.playing ? "暂停" : "播放");
-  toggle.disabled = !available;
+  toggle.disabled = !available || !!mediaState.webPageVisible
+    && !(mediaState.playing ? mediaState.pauseAvailable : mediaState.playAvailable);
   document.getElementById("mediaPrevious").disabled = mediaState.previousAvailable === false;
   document.getElementById("mediaNext").disabled = mediaState.nextAvailable === false;
   var speed = document.getElementById("mediaSpeed");
   speed.value = String(Number(mediaState.speed) || 1);
-  speed.disabled = !prepared;
+  speed.disabled = !prepared || !!mediaState.webPageVisible;
   document.getElementById("subtitleSize").value = String(style.sizePercent || 100);
   if (!subtitleOffsetEditing) {
     document.getElementById("subtitlePosition").value = style.position || "bottom";
@@ -672,6 +687,11 @@ function mediaCommand(action, extra) {
     generation = mediaControllerGeneration,
     sequence = ++mediaRequestSequence;
   body.action = action;
+  if (mediaState && mediaState.webPageVisible && action !== "volume") {
+    body.webPageKey = mediaState.webPageKey || "";
+    body.webMediaToken = mediaState.webMediaToken || "";
+    if (action === "toggle") body.action = mediaState.playing ? "pause" : "play";
+  }
   clearTimeout(mediaControllerTimer);
   api("/api/media/control", body, function (error, data) {
     if (!mediaControllerOpen || generation !== mediaControllerGeneration || sequence !== mediaRequestSequence) return;
@@ -866,6 +886,7 @@ document.addEventListener("keydown", function (event) {
   if (event.key === "Escape") mediaDismissSheet();
 }, false);
 window.addEventListener("pagehide", suspendRemoteControl, false);
+if (window.NtvNavigation) NtvNavigation.beforeLeave(suspendRemoteControl);
 window.addEventListener("pageshow", resumeRemoteControl, false);
 window.addEventListener("resize", mediaConstrainBackdrop, false);
 resumeRemoteControl();

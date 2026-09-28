@@ -111,6 +111,14 @@ public final class AudioArtworkView extends FrameLayout {
 
     boolean hasPendingPresentation() { return pendingPresentation; }
 
+    void trimMemory() {
+        if (getVisibility() == VISIBLE || isTransitionRunning() || pendingPresentation) return;
+        // This is an idle screen only; do not release visible or animating textures.
+        vinyl = null;
+        background.setShader(null);
+        backgroundHeight = 0;
+    }
+
     void clear() {
         clear(false);
     }

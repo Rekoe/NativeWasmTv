@@ -80,6 +80,15 @@ android {
             buildConfigField 'String', 'UPDATE_SHA256_FIELD', '"sha25664"'
             buildConfigField 'String', 'UPDATE_APK_ASSET', '"nTv64.apk"'
         }
+        x86 {
+            dimension 'architecture'
+            minSdkVersion 14
+            ndk { abiFilters 'x86' }
+            buildConfigField 'String', 'CJS_PLUGIN_ABI', '"x86"'
+            buildConfigField 'String', 'UPDATE_APK_URL_FIELD', '"apkX86Url"'
+            buildConfigField 'String', 'UPDATE_SHA256_FIELD', '"sha256X86"'
+            buildConfigField 'String', 'UPDATE_APK_ASSET', '"nTvX86.apk"'
+        }
     }
 
     buildTypes {
@@ -101,8 +110,9 @@ android {
             buildConfigField 'String', 'MP4_FINALIZER_SOURCE_URL', '""'
         }
         release {
-            minifyEnabled true
-            shrinkResources true
+            // Keep release stack traces readable; obfuscation saves little APK space.
+            minifyEnabled false
+            shrinkResources false
             if (releaseSigningAvailable) {
                 signingConfig signingConfigs.iptvRelease
             }
@@ -180,6 +190,8 @@ task packageWebkitCorePair(type: Jar) {
 
 dependencies {
     implementation 'tv.danmaku.ijk.media:ijkplayer-java:0.8.8'
+    // ARM builds use the locally patched IJK libraries; x86 uses upstream 0.8.8.
+    x86Implementation 'tv.danmaku.ijk.media:ijkplayer-x86:0.8.8'
     implementation('androidx.webkit:webkit:1.9.0') {
         exclude group: 'androidx.core', module: 'core'
     }
@@ -217,8 +229,9 @@ task generateVersionFile {
         }
         String sha25632 = fileSha256('updateApk32')
         String sha25664 = fileSha256('updateApk64')
-        if (!sha25632 || !sha25664) {
-            throw new GradleException('Both -PupdateApk32 and -PupdateApk64 are required')
+        String sha256X86 = fileSha256('updateApkX86')
+        if (!sha25632 || !sha25664 || !sha256X86) {
+            throw new GradleException('-PupdateApk32, -PupdateApk64 and -PupdateApkX86 are required')
         }
         String releaseBase = 'https://github.com/buhanzhe/NativeWasmTv/releases/latest/download/'
 
@@ -229,9 +242,11 @@ task generateVersionFile {
                 apkUrl      : releaseBase + 'nTv.apk',
                 apk32Url    : releaseBase + 'nTv.apk',
                 apk64Url    : releaseBase + 'nTv64.apk',
+                apkX86Url   : releaseBase + 'nTvX86.apk',
                 sha256      : sha25632,
                 sha25632    : sha25632,
                 sha25664    : sha25664,
+                sha256X86   : sha256X86,
                 releaseNotes: project.findProperty('releaseNotes') ?: '修复问题并提升播放体验。'
         ]
         String manifestJson = JsonOutput.prettyPrint(JsonOutput.toJson(manifest)) + '\n'
@@ -243,6 +258,7 @@ task generateVersionFile {
             rootProject.file('version-iptv.json').setText(manifestJson, 'UTF-8')
         }
         logger.lifecycle("Generated ${liteOutput} (arm32=${sha25632 ?: 'unset'}, "
-                + "arm64=${sha25664 ?: 'unset'}, important=${importantUpdate})")
+                + "arm64=${sha25664 ?: 'unset'}, x86=${sha256X86 ?: 'unset'}, "
+                + "important=${importantUpdate})")
     }
 }

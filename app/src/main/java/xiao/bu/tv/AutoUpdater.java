@@ -261,7 +261,7 @@ final class AutoUpdater {
         int versionCode = object.getInt("versionCode");
         String versionName = object.getString("versionName").trim();
         boolean architectureUpgrade = allowArchitectureUpgrade
-                && !is64BitBuild() && supports64Bit();
+                && isArm32Build() && supports64Bit();
         String urlField = architectureUpgrade ? "apk64Url" : BuildConfig.UPDATE_APK_URL_FIELD;
         String shaField = architectureUpgrade ? "sha25664" : BuildConfig.UPDATE_SHA256_FIELD;
         String apkAsset = architectureUpgrade ? "nTv64.apk" : BuildConfig.UPDATE_APK_ASSET;
@@ -284,6 +284,10 @@ final class AutoUpdater {
         }
         return new UpdateInfo(versionCode, versionName, apkUrl, sha256, releaseNotes,
                 apkAsset, architectureUpgrade);
+    }
+
+    private static boolean isArm32Build() {
+        return "arm32".equals(BuildConfig.FLAVOR);
     }
 
     private static boolean is64BitBuild() {

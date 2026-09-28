@@ -143,6 +143,10 @@ final class HlsProxyServer implements Closeable {
     private volatile String requestedVideoVariant = "";
     private volatile boolean byteRangeMediaPlaylist;
     private final HlsSegmentBitrate segmentBitrate = new HlsSegmentBitrate();
+    private final PlaybackHttpError.Attempt playbackHttpError = new PlaybackHttpError.Attempt();
+
+    void beginPlaybackAttempt() { playbackHttpError.reset(); }
+    boolean wasPlaybackForbidden() { return playbackHttpError.isForbidden(); }
 
     long measuredMediaBitrate(boolean video) {
         return segmentBitrate.bitrate(video, SystemClock.elapsedRealtime());
@@ -504,6 +508,7 @@ final class HlsProxyServer implements Closeable {
     }
 
     private void handle(Socket socket) {
+        final long httpAttempt = playbackHttpError.token();
         try {
             socket.setSoTimeout(15000);
             socket.setTcpNoDelay(true);
@@ -551,6 +556,7 @@ final class HlsProxyServer implements Closeable {
                 return;
             }
             Log.e(TAG, "Proxy request failed", error);
+            playbackHttpError.record(httpAttempt, error);
             // The player already received a 200/206 header and part of the media.
             // Close that response so its HTTP reader can reconnect; appending a
             // second HTTP error response here corrupts the compressed stream.
@@ -558,7 +564,9 @@ final class HlsProxyServer implements Closeable {
                 return;
             }
             try {
-                writeError(socket.getOutputStream(), 502, "Upstream failed");
+                boolean forbidden = PlaybackHttpError.isForbidden(error);
+                writeError(socket.getOutputStream(), forbidden ? 403 : 502,
+                        forbidden ? "Forbidden" : "Upstream failed");
             } catch (IOException ignored) {
                 // The player may already have closed the connection.
             }
