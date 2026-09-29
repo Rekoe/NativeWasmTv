@@ -51,16 +51,16 @@ public final class ChannelUiInstrumentation extends Instrumentation {
     private void pass(String text) { Bundle result=new Bundle(); result.putString("stream","PASS "+text+"\n"); sendStatus(0,result); }
 
     private void uiScalePolicy() {
-        check(Math.abs(UiScalePolicy.viewportScale(3840, 2160, 1f) - 1f) < .011f,
-                "4K scale changed");
-        check(Math.abs(UiScalePolicy.viewportScale(1920, 1080, 2f) - .5f) < .011f,
-                "1080p scale is not proportional");
-        check(Math.abs(UiScalePolicy.viewportScale(1280, 720, 3f) - .35f) < .011f,
+        check(Math.abs(UiScalePolicy.viewportScale(1920, 1080, 1f) - 1f) < .011f,
+                "1080p reference scale changed");
+        check(Math.abs(UiScalePolicy.viewportScale(3840, 2160, 2f) - 1.2f) < .011f,
+                "4K scale exceeded its upper bound");
+        check(Math.abs(UiScalePolicy.viewportScale(1280, 720, 3f) - .67f) < .011f,
                 "High-density 720p controls remain oversized");
         check(Math.abs(UiScalePolicy.viewportScale(1280, 720, 1f) - .8f) < .011f,
                 "Low-density 720p controls became unreadable");
         check(Math.abs(UiScalePolicy.resolve(1280, 720,
-                "extra_extra_large", -1f, 3f) - .7f) < .011f,
+                "extra_extra_large", -1f, 3f) - 1.34f) < .011f,
                 "User interface-size preset was not combined with viewport scale");
         pass("viewport, density and interface-size scaling bounds");
     }

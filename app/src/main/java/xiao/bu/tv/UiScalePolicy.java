@@ -2,7 +2,7 @@ package xiao.bu.tv;
 
 /** Computes bounded native UI scaling from the live viewport and the user preset. */
 final class UiScalePolicy {
-    private static final double REFERENCE_AREA = 3840.0d * 2160.0d;
+    private static final double REFERENCE_AREA = 1920.0d * 1080.0d;
     private static final float MIN_VIEWPORT_SCALE = 0.35f;
     private static final float MAX_VIEWPORT_SCALE = 1.20f;
     private static final float MIN_EFFECTIVE_SCALE = 0.35f;
@@ -35,7 +35,7 @@ final class UiScalePolicy {
         }
         double areaRatio = ((double) viewportWidth * (double) viewportHeight)
                 / REFERENCE_AREA;
-        // Keep the same screen-area proportion as 4K. A density-aware floor keeps
+        // Keep the same screen-area proportion as 1080p. A density-aware floor keeps
         // the smallest text and touch targets readable on low-density televisions.
         float proportional = (float) Math.sqrt(Math.max(0.0001d, areaRatio));
         float readableFloor = clamp(0.90f / Math.max(0.1f, density),
