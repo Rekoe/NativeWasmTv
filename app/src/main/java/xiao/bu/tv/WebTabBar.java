@@ -101,6 +101,7 @@ final class WebTabBar extends LinearLayout {
     private final HorizontalScrollView bookmarkScroll;
     private final LinearLayout tabsRow;
     private final LinearLayout bookmarkRow;
+    private final BrowserIconView addTabButton;
     private final BrowserIconView moreButton;
     private final Callback callback;
     private final float density;
@@ -111,6 +112,7 @@ final class WebTabBar extends LinearLayout {
     private boolean globalAdBlockEnabled = true;
     private boolean webRtcEnabled;
     private int nextId = 1;
+    private float interfaceScale = 1f;
     private int animateAddedTabId = -1;
     private Tab active;
     private FrameLayout folderLayer;
@@ -166,11 +168,11 @@ final class WebTabBar extends LinearLayout {
         tabScroll.addView(tabStrip, new HorizontalScrollView.LayoutParams(
                 LayoutParams.WRAP_CONTENT, LayoutParams.MATCH_PARENT));
         tabsRow.addView(tabScroll, new LayoutParams(0, LayoutParams.MATCH_PARENT, 1f));
-        BrowserIconView addTab = iconAction(BrowserIconView.ADD, "新建标签",
+        addTabButton = iconAction(BrowserIconView.ADD, "新建标签",
                 v -> callback.onNewTab());
         LinearLayout.LayoutParams addTabParams = new LinearLayout.LayoutParams(dp(36), dp(TAB_CARD_HEIGHT_DP));
         addTabParams.setMargins(dp(2), 0, dp(2), 0);
-        tabsRow.addView(addTab, addTabParams);
+        tabsRow.addView(addTabButton, addTabParams);
         addView(tabsRow, new LayoutParams(LayoutParams.MATCH_PARENT, dp(TAB_ROW_HEIGHT_DP)));
 
         bookmarkRow = row();
@@ -193,6 +195,37 @@ final class WebTabBar extends LinearLayout {
     }
 
     int heightDp() { return bookmarkBarVisible ? HEIGHT_DP : COMPACT_HEIGHT_DP; }
+
+    int heightPx() { return dp(heightDp()); }
+
+    void setInterfaceScale(float scale) {
+        float safeScale = Math.max(0.35f, Math.min(1.60f, scale));
+        if (Math.abs(interfaceScale - safeScale) < 0.001f) return;
+        dismissFolderPanel();
+        interfaceScale = safeScale;
+        bookmarkTextPaint.setTextSize(11f
+                * getResources().getDisplayMetrics().scaledDensity * interfaceScale);
+        setPadding(dp(4), dp(2), dp(4), dp(2));
+
+        ViewGroup.LayoutParams tabsParams = tabsRow.getLayoutParams();
+        tabsParams.height = dp(TAB_ROW_HEIGHT_DP);
+        tabsRow.setLayoutParams(tabsParams);
+        LinearLayout.LayoutParams addParams = (LinearLayout.LayoutParams)
+                addTabButton.getLayoutParams();
+        addParams.width = dp(36);
+        addParams.height = dp(TAB_CARD_HEIGHT_DP);
+        addParams.setMargins(dp(2), 0, dp(2), 0);
+        addTabButton.setLayoutParams(addParams);
+
+        ViewGroup.LayoutParams bookmarkParams = bookmarkRow.getLayoutParams();
+        bookmarkParams.height = dp(28);
+        bookmarkRow.setLayoutParams(bookmarkParams);
+        bookmarkStrip.setPadding(dp(1), 0, dp(1), 0);
+        updateMoreButtonPlacement();
+        render();
+        requestLayout();
+        callback.onToolbarHeightChanged(heightDp());
+    }
 
     @Override
     public boolean dispatchTouchEvent(MotionEvent event) {
@@ -499,7 +532,7 @@ final class WebTabBar extends LinearLayout {
                 title.setText(tab.sleeping ? "休眠 · " + displayTitle(tab.title, tab.url)
                         : displayTitle(tab.title, tab.url));
                 title.setTextColor(tab.sleeping ? 0xff777b82 : 0xff202124);
-                title.setTextSize(11f);
+                title.setTextSize(scaledSp(11f));
                 title.setSingleLine(true);
                 title.setEllipsize(android.text.TextUtils.TruncateAt.END);
                 title.setGravity(Gravity.CENTER_VERTICAL);
@@ -688,7 +721,7 @@ final class WebTabBar extends LinearLayout {
             final OnClickListener action = actions[i];
             TextView item = new TextView(getContext());
             item.setText(labels[i]);
-            item.setTextSize(13f);
+            item.setTextSize(scaledSp(13f));
             item.setTextColor(0xff202124);
             item.setGravity(Gravity.CENTER_VERTICAL);
             item.setPadding(dp(14), 0, dp(12), 0);
@@ -836,7 +869,7 @@ final class WebTabBar extends LinearLayout {
         title.setText(compactTitle(text));
         title.setSingleLine(true);
         title.setEllipsize(android.text.TextUtils.TruncateAt.END);
-        title.setTextSize(11f);
+        title.setTextSize(scaledSp(11f));
         title.setTextColor(0xff303134);
         title.setGravity(Gravity.CENTER_VERTICAL);
         title.setIncludeFontPadding(false);
@@ -865,7 +898,7 @@ final class WebTabBar extends LinearLayout {
         title.setText(compactTitle(text));
         title.setSingleLine(true);
         title.setEllipsize(android.text.TextUtils.TruncateAt.END);
-        title.setTextSize(11f);
+        title.setTextSize(scaledSp(11f));
         title.setTextColor(0xff303134);
         title.setGravity(Gravity.CENTER_VERTICAL);
         title.setIncludeFontPadding(false);
@@ -976,7 +1009,7 @@ final class WebTabBar extends LinearLayout {
         folderTitle.setSingleLine(true);
         folderTitle.setEllipsize(android.text.TextUtils.TruncateAt.END);
         folderTitle.setTextColor(0xff202124);
-        folderTitle.setTextSize(13f);
+        folderTitle.setTextSize(scaledSp(13f));
         folderTitle.setGravity(Gravity.CENTER_VERTICAL);
         header.addView(folderTitle, new LinearLayout.LayoutParams(
                 0, LayoutParams.MATCH_PARENT, 1f));
@@ -1360,7 +1393,7 @@ final class WebTabBar extends LinearLayout {
     private TextView menuItem(String label) {
         TextView item = new TextView(getContext());
         item.setText(label);
-        item.setTextSize(13f);
+        item.setTextSize(scaledSp(13f));
         item.setTextColor(0xff202124);
         item.setGravity(Gravity.CENTER_VERTICAL);
         item.setPadding(dp(14), 0, dp(12), 0);
@@ -1515,5 +1548,6 @@ final class WebTabBar extends LinearLayout {
 
     private static String compactTitle(String value) { return safe(value).trim(); }
     private static String safe(String value) { return value == null ? "" : value; }
-    private int dp(int value) { return Math.round(value * density); }
+    private float scaledSp(float value) { return value * interfaceScale; }
+    private int dp(int value) { return Math.round(value * density * interfaceScale); }
 }

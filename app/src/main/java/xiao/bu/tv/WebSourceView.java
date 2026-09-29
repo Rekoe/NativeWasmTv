@@ -152,6 +152,7 @@ public final class WebSourceView extends FrameLayout {
     private String userScripts = "[]";
     private int viewportWidth = VIEWPORT_720P_WIDTH;
     private int viewportHeight = VIEWPORT_720P_HEIGHT;
+    private float interfaceScale = 1f;
     private float loadingInterfaceScale = 1f;
     private int compatibilityInjectionCount;
     private int profileInjectionCount;
@@ -247,8 +248,7 @@ public final class WebSourceView extends FrameLayout {
                 setBrowserFullscreen(true);
             }
         });
-        tabBarHeight = Math.round(tabBar.heightDp()
-                * getResources().getDisplayMetrics().density);
+        tabBarHeight = tabBar.heightPx();
         tabBar.setVisibility(View.GONE);
         addView(tabBar, new LayoutParams(LayoutParams.MATCH_PARENT, tabBarHeight, Gravity.TOP));
         fullscreenExitButton = new BrowserIconView(context, BrowserIconView.CLOSE);
@@ -1147,7 +1147,7 @@ public final class WebSourceView extends FrameLayout {
     }
 
     private void updateToolbarHeight(int heightDp) {
-        int next = Math.round(heightDp * getResources().getDisplayMetrics().density);
+        int next = browserFullscreen ? 0 : tabBar.heightPx();
         if (next == tabBarHeight) return;
         tabBarHeight = next;
         LayoutParams toolbar = (LayoutParams) tabBar.getLayoutParams();
@@ -1161,8 +1161,7 @@ public final class WebSourceView extends FrameLayout {
     private void setBrowserFullscreen(boolean enabled) {
         if (browserFullscreen == enabled) return;
         browserFullscreen = enabled;
-        tabBarHeight = enabled ? 0 : Math.round(tabBar.heightDp()
-                * getResources().getDisplayMetrics().density);
+        tabBarHeight = enabled ? 0 : tabBar.heightPx();
         tabBar.setVisibility(enabled || !pageActive ? View.GONE : View.VISIBLE);
         removeCallbacks(hideFullscreenExit);
         fullscreenExitButton.setVisibility(View.GONE);
@@ -1685,8 +1684,7 @@ public final class WebSourceView extends FrameLayout {
         tabBar.setVisibility(View.GONE);
         fullscreenExitButton.setVisibility(View.GONE);
         browserFullscreen = false;
-        tabBarHeight = Math.round(tabBar.heightDp()
-                * getResources().getDisplayMetrics().density);
+        tabBarHeight = tabBar.heightPx();
         setVisibility(View.GONE);
         // startChannel closes and opens in the same UI turn. Let the destination
         // load directly; only unload if we actually leave the browser. Keeping
@@ -1907,9 +1905,18 @@ public final class WebSourceView extends FrameLayout {
     }
 
     void setInterfaceScale(float scale) {
-        loadingInterfaceScale = Math.max(0.9f, Math.min(2f, scale));
-        float safeScale = loadingInterfaceScale
-                * Math.max(0.5f, Math.min(1f, viewportWidth / (float) VIEWPORT_4K_WIDTH));
+        float safeScale = Math.max(0.35f, Math.min(1.60f, scale));
+        interfaceScale = safeScale;
+        loadingInterfaceScale = safeScale;
+        dismissSmartContextPopup();
+        tabBar.setInterfaceScale(safeScale);
+        fullscreenExitButton.setPadding(dp(6), dp(6), dp(6), dp(6));
+        LayoutParams exitParams = (LayoutParams) fullscreenExitButton.getLayoutParams();
+        exitParams.width = dp(42);
+        exitParams.height = dp(42);
+        exitParams.topMargin = dp(8);
+        fullscreenExitButton.setLayoutParams(exitParams);
+        updateToolbarHeight(tabBar.heightDp());
         // Resize each native element instead of scaling a pre-rendered card. Scaling the
         // whole hierarchy makes text and the spinner visibly soft on 4K televisions.
         loadingOverlay.setScaleX(1f);
@@ -2211,7 +2218,7 @@ public final class WebSourceView extends FrameLayout {
         TextView item = new TextView(getContext());
         item.setText(label);
         item.setTextColor(0xff202124);
-        item.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f);
+        item.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f * interfaceScale);
         item.setGravity(Gravity.CENTER_VERTICAL);
         item.setPadding(dp(14), 0, dp(14), 0);
         item.setBackgroundResource(android.R.drawable.list_selector_background);
@@ -2959,6 +2966,7 @@ public final class WebSourceView extends FrameLayout {
     }
 
     private int dp(int value) {
-        return Math.round(value * getResources().getDisplayMetrics().density);
+        return Math.round(value * getResources().getDisplayMetrics().density
+                * interfaceScale);
     }
 }

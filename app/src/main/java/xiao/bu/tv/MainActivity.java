@@ -8404,31 +8404,8 @@ public final class MainActivity extends Activity {
         detectedDisplayInches = estimateDisplayDiagonal(
                 physicalMetrics.widthPixels, physicalMetrics.heightPixels,
                 physicalMetrics);
-        if (UI_SCALE_STANDARD.equals(uiScaleMode)) {
-            return 1f;
-        }
-        if (UI_SCALE_LARGE.equals(uiScaleMode)) {
-            return 1.25f;
-        }
-        if (UI_SCALE_EXTRA_LARGE.equals(uiScaleMode)) {
-            return 1.50f;
-        }
-        if (UI_SCALE_EXTRA_EXTRA_LARGE.equals(uiScaleMode)) {
-            return 2.00f;
-        }
-        float diagonal = detectedDisplayInches;
-        if (diagonal >= 32f && diagonal <= 100f) {
-            return roundUiScale(Math.max(0.95f, Math.min(1.30f, 65f / diagonal)));
-        }
-        float density = Math.max(0.1f, metrics.density);
-        float shortSideDp = Math.min(viewportWidth, viewportHeight) / density;
-        if (shortSideDp >= 1500f) {
-            return 1.15f;
-        }
-        if (shortSideDp >= 1250f) {
-            return 1.08f;
-        }
-        return 1f;
+        return UiScalePolicy.resolve(viewportWidth, viewportHeight, uiScaleMode,
+                detectedDisplayInches, metrics.density);
     }
 
     private DisplayMetrics physicalDisplayMetrics() {
@@ -8459,10 +8436,6 @@ public final class MainActivity extends Activity {
         float diagonal = (float) Math.sqrt(widthInches * widthInches
                 + heightInches * heightInches);
         return diagonal >= 32f && diagonal <= 100f ? diagonal : -1f;
-    }
-
-    private static float roundUiScale(float value) {
-        return Math.round(value * 100f) / 100f;
     }
 
     private float effectiveUiDensity() {
@@ -9542,13 +9515,14 @@ public final class MainActivity extends Activity {
     }
 
     private void updateChannelPanelWidth() {
-        int screenWidth = Math.max(root.getWidth(), getResources().getDisplayMetrics().widthPixels);
+        int screenWidth = root.getWidth() > 0
+                ? root.getWidth() : getResources().getDisplayMetrics().widthPixels;
         float density = effectiveUiDensity();
         int maximumPanelWidth = Math.max(1, screenWidth - Math.round(24f * density));
 
-        // Keep the touch target at least 40 physical dp even with reduced UI scale.
-        int epgTouchSize = (int) Math.ceil(40f * Math.max(density,
-                getResources().getDisplayMetrics().density));
+        // Keep a usable physical touch target without letting a high-density 720p
+        // device expand this handle to the unscaled full-screen dp size.
+        int epgTouchSize = Math.max(32, (int) Math.ceil(40f * density));
         setExactWidth(epgToggle, epgTouchSize);
         ViewGroup.LayoutParams epgToggleParams = epgToggle.getLayoutParams();
         if (epgToggleParams.height < epgTouchSize) {
@@ -9719,7 +9693,8 @@ public final class MainActivity extends Activity {
     }
 
     private void updateChannelBarWidth() {
-        int screenWidth = Math.max(root.getWidth(), getResources().getDisplayMetrics().widthPixels);
+        int screenWidth = root.getWidth() > 0
+                ? root.getWidth() : getResources().getDisplayMetrics().widthPixels;
         float density = effectiveUiDensity();
         // Stable geometry: status, bitrate and EPG text must not resize the card.
         int width = Math.min(Math.round(440f * density),
