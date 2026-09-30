@@ -110,8 +110,9 @@ android {
             buildConfigField 'String', 'MP4_FINALIZER_SOURCE_URL', '""'
         }
         release {
-            // Keep release stack traces readable; obfuscation saves little APK space.
-            minifyEnabled false
+            // Remove unreachable Java code but preserve class names for old-device
+            // reflection, readable crash traces and release APK validation.
+            minifyEnabled true
             shrinkResources false
             if (releaseSigningAvailable) {
                 signingConfig signingConfigs.iptvRelease
@@ -140,8 +141,6 @@ android {
     }
 
     sourceSets {
-        // Only upstream TextureRender is retained, for legacy one-shot screenshots.
-        main.java.srcDirs += [rootProject.file("third_party/android-transcoder/src")]
         main {
             jni.srcDirs = []
             jniLibs.srcDirs = ['src/main/libs']

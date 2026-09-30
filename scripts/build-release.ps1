@@ -13,6 +13,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+Add-Type -AssemblyName System.IO.Compression.FileSystem
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 if (-not $OutputDirectory) {
@@ -116,7 +117,6 @@ function Find-BuildTool([string]$sdkDirectory, [string]$name) {
 }
 
 function Get-ApkArchitectures([string]$apkPath) {
-    Add-Type -AssemblyName System.IO.Compression.FileSystem
     $archive = [System.IO.Compression.ZipFile]::OpenRead($apkPath)
     try {
         return @($archive.Entries |

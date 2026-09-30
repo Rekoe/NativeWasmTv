@@ -9,6 +9,8 @@ import android.content.Intent;
 import android.content.pm.ActivityInfo;
 import android.content.res.Configuration;
 import android.graphics.Color;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.hardware.Sensor;
 import android.hardware.SensorEvent;
 import android.hardware.SensorEventListener;
@@ -18,6 +20,7 @@ import android.os.Bundle;
 import android.os.Build;
 import android.os.VibrationEffect;
 import android.os.Vibrator;
+import android.util.Base64;
 import android.view.HapticFeedbackConstants;
 import android.view.View;
 import android.view.Gravity;
@@ -32,6 +35,7 @@ import android.widget.Toast;
 
 import java.util.Locale;
 import java.util.WeakHashMap;
+import java.io.ByteArrayOutputStream;
 
 public final class ManagementActivity extends Activity {
     // Accessed only on the main thread. Closing a page must not end its cast session.
@@ -53,6 +57,7 @@ public final class ManagementActivity extends Activity {
     private static final int SCREENSHOT_PERMISSION_REQUEST = 4602;
     private boolean screenshotPermissionPending;
     private boolean screenshotBusy;
+    private volatile String screenshotPreviewData;
     private WebView webView;
     private String managementUrl;
     private ValueCallback<Uri[]> filePathCallback;
@@ -531,7 +536,56 @@ public final class ManagementActivity extends Activity {
         }
     }
 
+    /** A small display-only copy; the image saved to the gallery remains source resolution. */
+    private static ScreenshotPreview createScreenshotPreview(byte[] image) {
+        Bitmap bitmap = null;
+        try {
+            BitmapFactory.Options bounds = new BitmapFactory.Options();
+            bounds.inJustDecodeBounds = true;
+            BitmapFactory.decodeByteArray(image, 0, image.length, bounds);
+            if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null;
+            BitmapFactory.Options options = new BitmapFactory.Options();
+            options.inSampleSize = 1;
+            while (Math.max(bounds.outWidth / options.inSampleSize,
+                    bounds.outHeight / options.inSampleSize) > 960) {
+                options.inSampleSize *= 2;
+            }
+            bitmap = BitmapFactory.decodeByteArray(image, 0, image.length, options);
+            if (bitmap == null) return null;
+            ByteArrayOutputStream output = new ByteArrayOutputStream(96 * 1024);
+            if (!bitmap.compress(Bitmap.CompressFormat.JPEG, 78, output)) return null;
+            return new ScreenshotPreview("data:image/jpeg;base64,"
+                    + Base64.encodeToString(output.toByteArray(), Base64.NO_WRAP),
+                    bounds.outWidth, bounds.outHeight);
+        } catch (RuntimeException ignored) {
+            return null;
+        } catch (OutOfMemoryError ignored) {
+            return null;
+        } finally {
+            if (bitmap != null) bitmap.recycle();
+        }
+    }
+
+    private static final class ScreenshotPreview {
+        final String dataUri;
+        final int width;
+        final int height;
+
+        ScreenshotPreview(String dataUri, int width, int height) {
+            this.dataUri = dataUri;
+            this.width = width;
+            this.height = height;
+        }
+    }
+
     private final class NativeDeviceBridge implements SensorEventListener {
+        @JavascriptInterface
+        public String consumeScreenshotPreview() {
+            String preview = screenshotPreviewData;
+            screenshotPreviewData = null;
+            return preview == null ? "" : preview;
+        }
+
         @JavascriptInterface
         public boolean returnFromSniffedResource() {
             MainActivity owner = LocalPlayerRegistry.localInputOwner();
@@ -656,6 +710,7 @@ public final class ManagementActivity extends Activity {
                         return;
                     }
                     screenshotBusy = true;
+                    screenshotPreviewData = null;
                     final String url = Uri.parse(managementUrl).buildUpon()
                             .path(VideoScreenshot.PATH).clearQuery().fragment(null).build().toString();
                     Toast.makeText(ManagementActivity.this, "正在截取视频画面…", Toast.LENGTH_SHORT).show();
@@ -664,11 +719,27 @@ public final class ManagementActivity extends Activity {
                             try {
                                 final byte[] image = VideoScreenshot.download(url);
                                 ScreenshotGallery.save(getApplicationContext(), image);
+                                final ScreenshotPreview preview = createScreenshotPreview(image);
                                 runOnUiThread(new Runnable() {
                                     @Override public void run() {
                                         screenshotBusy = false;
-                                        Toast.makeText(ManagementActivity.this, "截图已保存到相册 Pictures/nTv",
+                                        Toast.makeText(ManagementActivity.this,
+                                                preview == null
+                                                        ? "原图已保存到相册，当前设备无法生成回显"
+                                                        : "原图已保存到相册 Pictures/nTv",
                                                 Toast.LENGTH_LONG).show();
+                                        if (preview != null && webView != null && !isFinishing()
+                                                && isLocalControlPage(webView.getUrl())
+                                                && "/pages/media.html".equals(
+                                                        Uri.parse(webView.getUrl()).getPath())) {
+                                            screenshotPreviewData = preview.dataUri;
+                                            String script = "window.mediaNativeScreenshotReady&&"
+                                                    + "window.mediaNativeScreenshotReady("
+                                                    + preview.width + "," + preview.height + ")";
+                                            if (Build.VERSION.SDK_INT >= 19)
+                                                webView.evaluateJavascript(script, null);
+                                            else webView.loadUrl("javascript:" + script);
+                                        }
                                     }
                                 });
                             } catch (final Exception error) {

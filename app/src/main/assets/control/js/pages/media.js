@@ -175,7 +175,8 @@ function openVideoRecorderPage() {
     Date.now());
 }
 
-var mediaPreviewKey = "", mediaPreviewCrop = { top: 0, bottom: 0 },
+var mediaPreviewKey = "", mediaPreviewGeneration = 0,
+  mediaPreviewCrop = { top: 0, bottom: 0 },
   mediaShotBusy = false, mediaShotRequest = null, mediaShotUrl = "";
 
 function mediaConstrainBackdrop() {
@@ -255,17 +256,22 @@ function mediaUpdatePreview(ready) {
     frame.hidden = image.hidden = true;
     mediaPreviewKey = ""; // Invalidate an in-flight still from the previous tab even before the new one is ready.
   }
-  if (!ready || mediaState.lowResource || key === mediaPreviewKey) return;
+  if (!ready || key === mediaPreviewKey) return;
   mediaPreviewKey = key;
+  var generation = ++mediaPreviewGeneration;
   image.onload = function () {
+    if (generation !== mediaPreviewGeneration) return;
     var analysis = mediaAnalyzePreview(image);
     mediaPreviewCrop = { top: analysis.top, bottom: analysis.bottom };
     frame.hidden = image.hidden = !!mediaState.audioOnly || key !== mediaPreviewKey || analysis.invalidGreen;
     if (!frame.hidden) mediaConstrainBackdrop();
   };
-  image.onerror = function () { frame.hidden = image.hidden = true; };
-  // A single still per channel, never a screenshot polling loop.
-  image.src = "/api/recording/screenshot?t=" + Date.now();
+  image.onerror = function () {
+    if (generation === mediaPreviewGeneration) frame.hidden = image.hidden = true;
+  };
+  // One small JPEG still when the controller opens or the channel changes.
+  // Full-resolution JPEG screenshots are a separate, explicit user action.
+  image.src = "/api/recording/screenshot?preview=1&t=" + Date.now();
 }
 
 function mediaUpdateArtwork() {
@@ -292,6 +298,32 @@ function mediaCloseShot(event) {
   if (window.NtvNavigation) NtvNavigation.overlayClosed("media-shot");
 }
 
+function mediaShowCapturedScreenshot(url, savedToGallery, width, height, extension) {
+  if (!mediaControllerOpen || !mediaState) return;
+  document.getElementById("mediaShotPreview").src = url;
+  var save = document.getElementById("mediaShotSave"),
+    saved = document.getElementById("mediaShotSaved");
+  save.hidden = !!savedToGallery;
+  saved.hidden = !savedToGallery;
+  if (savedToGallery) {
+    saved.textContent = "原图 " + width + "×" + height + " 已保存到相册 Pictures/nTv";
+  } else {
+    save.href = url;
+    save.download = "nTv-screenshot-" + Date.now() + (extension || ".jpg");
+  }
+  mediaCloseSettings(); mediaCloseSniffed();
+  var backdrop = document.getElementById("mediaShotBackdrop");
+  backdrop.className = "media-sheet-backdrop open";
+  backdrop.setAttribute("aria-hidden", "false");
+  if (window.NtvNavigation) NtvNavigation.overlayOpen("media-shot", mediaCloseShot);
+}
+
+function mediaNativeScreenshotReady(width, height) {
+  if (!window.NtvDevice || typeof NtvDevice.consumeScreenshotPreview !== "function") return;
+  var preview = NtvDevice.consumeScreenshotPreview();
+  if (preview) mediaShowCapturedScreenshot(preview, true, width, height);
+}
+
 function mediaCaptureScreenshot() {
   if (mediaShotBusy || !mediaControllerOpen || !mediaState || mediaState.screenshotAvailable !== true) return;
   if (window.NtvDevice && typeof NtvDevice.saveVideoScreenshot === "function") {
@@ -311,11 +343,12 @@ function mediaCaptureScreenshot() {
   }
   request.open("GET", "/api/recording/screenshot?t=" + Date.now(), true);
   request.responseType = "blob";
-  request.timeout = 20000;
+  request.timeout = 60000;
   request.onload = function () {
     if (!mediaControllerOpen || generation !== mediaControllerGeneration) { finish(); return; }
     var blob = request.response;
-    if (request.status !== 200 || !blob || !blob.size || blob.type.indexOf("image/png") !== 0) {
+    if (request.status !== 200 || !blob || !blob.size
+        || !/^image\/(jpeg|png)/i.test(blob.type)) {
       var reader = new FileReader();
       reader.onload = function () {
         var message = "无法截图，请确认设备正在播放视频";
@@ -328,16 +361,9 @@ function mediaCaptureScreenshot() {
     }
     if (mediaShotUrl) URL.revokeObjectURL(mediaShotUrl);
     mediaShotUrl = URL.createObjectURL(blob);
-    document.getElementById("mediaShotPreview").src = mediaShotUrl;
-    var save = document.getElementById("mediaShotSave");
-    save.href = mediaShotUrl;
-    save.download = "nTv-screenshot-" + Date.now() + ".png";
-    mediaCloseSettings(); mediaCloseSniffed();
-    var backdrop = document.getElementById("mediaShotBackdrop");
-    backdrop.className = "media-sheet-backdrop open";
-    backdrop.setAttribute("aria-hidden", "false");
-    if (window.NtvNavigation) NtvNavigation.overlayOpen("media-shot", mediaCloseShot);
-    save.click();
+    mediaShowCapturedScreenshot(mediaShotUrl, false, 0, 0,
+      blob.type.indexOf("image/png") === 0 ? ".png" : ".jpg");
+    document.getElementById("mediaShotSave").click();
     finish();
   };
   request.onerror = function () { finish("截图连接失败，请重试"); };
@@ -678,6 +704,15 @@ function setMediaControllerActive(active) {
     mediaCloseSniffed();
     mediaCloseShot();
     if (mediaShotRequest) mediaShotRequest.abort();
+    mediaPreviewKey = "";
+    mediaPreviewGeneration++;
+    var previewFrame = document.getElementById("mediaBackdropFrame"),
+      previewImage = document.getElementById("mediaBackdropImage");
+    if (previewFrame) previewFrame.hidden = true;
+    if (previewImage) {
+      previewImage.hidden = true;
+      previewImage.removeAttribute("src");
+    }
   }
 }
 
