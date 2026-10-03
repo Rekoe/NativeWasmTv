@@ -189,6 +189,8 @@ public final class MainActivity extends Activity {
     private static final String REMOTE_CATALOG_URL = "remote_catalog_url";
 
     private static final String LIVE_DELAY_MODE = "live_delay_mode";
+    private static final String KITKAT_LIVE_DELAY_DEFAULT_MIGRATION =
+            "kitkat_live_delay_default_migration_v2";
     private static final String LIVE_DELAY_LOW = "low";
     private static final String LIVE_DELAY_BALANCED = "balanced";
     private static final String LIVE_DELAY_STABLE = "stable";
@@ -795,6 +797,8 @@ public final class MainActivity extends Activity {
     private boolean channelPanelHovering;
     private boolean keepChannelListVisibleOnWebExit;
     private boolean channelSwitchAnimating;
+    private long channelSwitchTimingStartedAt;
+    private int channelSwitchTimingRequestId = -1;
     private boolean gestureReboundAnimating;
     private float channelSwitchDirectionX;
     private float channelSwitchDirectionY;
@@ -1144,8 +1148,18 @@ public final class MainActivity extends Activity {
         remoteCatalogUrl = "";
         preferences.edit().remove(REMOTE_CATALOG_URL).apply();
 
-        liveDelayMode = sanitizeLiveDelayMode(
-                preferences.getString(LIVE_DELAY_MODE, LIVE_DELAY_STABLE));
+        String storedLiveDelayMode = preferences.getString(LIVE_DELAY_MODE, null);
+        liveDelayMode = sanitizeLiveDelayMode(storedLiveDelayMode == null
+                ? LIVE_DELAY_STABLE : storedLiveDelayMode);
+        if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.KITKAT
+                && !preferences.getBoolean(KITKAT_LIVE_DELAY_DEFAULT_MIGRATION, false)) {
+            SharedPreferences.Editor editor = preferences.edit();
+            if (storedLiveDelayMode == null || LIVE_DELAY_STABLE.equals(liveDelayMode)) {
+                liveDelayMode = LIVE_DELAY_BALANCED;
+                editor.putString(LIVE_DELAY_MODE, liveDelayMode);
+            }
+            editor.putBoolean(KITKAT_LIVE_DELAY_DEFAULT_MIGRATION, true).apply();
+        }
         subtitleSizePercent = sanitizeSubtitleSizePercent(
                 preferences.getInt(SUBTITLE_SIZE_PERCENT, 100));
         subtitlePosition = sanitizeSubtitlePosition(preferences.getString(
@@ -5379,7 +5393,23 @@ public final class MainActivity extends Activity {
         startChannel(index);
     }
 
+    private void beginChannelSwitchTiming(int requestId, long startedAt) {
+        channelSwitchTimingRequestId = requestId;
+        channelSwitchTimingStartedAt = startedAt;
+        Log.i(TAG, "Channel switch begin request=" + requestId
+                + " sdk=" + Build.VERSION.SDK_INT
+                + " delayMode=" + liveDelayMode
+                + " channel=" + currentChannel().name);
+    }
+
+    private void logChannelSwitchStage(int requestId, String stage) {
+        if (requestId != channelSwitchTimingRequestId || channelSwitchTimingStartedAt <= 0L) return;
+        Log.i(TAG, "Channel switch stage=" + stage + " request=" + requestId
+                + " elapsedMs=" + (SystemClock.elapsedRealtime() - channelSwitchTimingStartedAt));
+    }
+
     private void startChannel(int index) {
+        final long switchStartedAt = SystemClock.elapsedRealtime();
         if (multimediaSuspended) return;
         cancelCustomSourceTimeout();
         multimediaReceiverChannel = null;
@@ -5446,6 +5476,7 @@ public final class MainActivity extends Activity {
         configureEmbeddedResolverMode(group, channel);
         updatePlayingChannelSelection();
         final int requestId = ++playRequestId;
+        beginChannelSwitchTiming(requestId, switchStartedAt);
 
         if (channelSwitchAnimating
                 && (channelSwitchDirectionY != 0f || channelSwitchDirectionX != 0f)) {
@@ -5471,10 +5502,12 @@ public final class MainActivity extends Activity {
                 if (requestId != playRequestId || isFinishing()) return;
                 pendingChannelSetupAfterRelease = null;
                 try {
+                    logChannelSwitchStage(requestId, "proxy-reset-begin");
                     // The outgoing HLS proxy must stay alive until MediaPlayer.release()
                     // has stopped the old LiveSession. Closing it first makes Android
                     // 4.0 retry the dead loopback connection for tens of seconds.
                     resetProxyForChannelSwitch();
+                    logChannelSwitchStage(requestId, "proxy-ready");
                 } catch (IOException error) {
                     Log.e(TAG, "Unable to reset proxy for channel switch", error);
                     abortChannelSwitchAnimation();
@@ -5482,6 +5515,7 @@ public final class MainActivity extends Activity {
                     showChannelBar(channel.name, "切换失败: " + error.getMessage());
                     return;
                 }
+                logChannelSwitchStage(requestId, "resolve-begin");
                 if (source == ChannelCatalog.SOURCE_CCTV_WEB
                         || source == ChannelCatalog.SOURCE_CUSTOM) {
                     resolveFallbackUrl(channel, requestId);
@@ -5733,7 +5767,23 @@ public final class MainActivity extends Activity {
                         if (error != null) {
                             abortChannelSwitchAnimation();
                             hideLoading();
+                            if (isDeviceNetworkDisconnected()) {
+                                showChannelBar(currentChannel().name,
+                                        "未连接网络，请连接网络后重试");
+                                Toast.makeText(MainActivity.this,
+                                        "未连接网络，请连接网络后重试",
+                                        Toast.LENGTH_LONG).show();
+                                return;
+                            }
                             String reason = error.getMessage();
+                            if (isPluginDownloadNetworkError(error)) {
+                                showChannelBar(currentChannel().name,
+                                        "无法连接插件下载服务器，请检查网络后重试");
+                                Toast.makeText(MainActivity.this,
+                                        "无法连接插件下载服务器，请检查网络后重试",
+                                        Toast.LENGTH_LONG).show();
+                                return;
+                            }
                             showChannelBar(currentChannel().name,
                                     "兼容插件安装失败" + (reason == null ? "" : "：" + reason));
                             return;
@@ -5744,6 +5794,29 @@ public final class MainActivity extends Activity {
                 });
             }
         }, "cjs-plugin-install").start();
+    }
+
+    private static boolean isPluginDownloadNetworkError(Throwable error) {
+        for (Throwable current = error; current != null; current = current.getCause()) {
+            if (current instanceof java.net.UnknownHostException
+                    || current instanceof java.net.SocketTimeoutException
+                    || current instanceof java.net.ConnectException
+                    || current instanceof java.net.NoRouteToHostException) {
+                return true;
+            }
+            String message = current.getMessage();
+            if (message == null) continue;
+            message = message.toLowerCase(Locale.US);
+            if (message.contains("unable to resolve host")
+                    || message.contains("network is unreachable")
+                    || message.contains("connection timed out")
+                    || message.contains("failed to connect")
+                    || message.contains("网络不可用")
+                    || message.contains("无法解析主机")) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private boolean isActiveCctvWebSource() {
@@ -6871,6 +6944,7 @@ public final class MainActivity extends Activity {
 
     private void startResolvedPlayer(Channel channel, String streamUrl,
             boolean directHttpMedia, String castTransport) {
+        logChannelSwitchStage(playRequestId, "url-resolved");
         receiverCastTransport = sanitizeRtspTransport(castTransport);
 
         updateLoadingStatus("正在连接视频");
@@ -7468,6 +7542,7 @@ public final class MainActivity extends Activity {
                 if (player != mediaPlayer) {
                     return;
                 }
+                logChannelSwitchStage(sourceRequestId, "player-prepared");
                 prepared = true;
                 audioOnlyPlayback = radioChannel || isAudioOnly(nextPlayer);
                 String artworkSource = channel.sourceUrl(currentSourceIndex);
@@ -7557,6 +7632,7 @@ public final class MainActivity extends Activity {
                     return false;
                 }
                 if (what == MEDIA_INFO_VIDEO_RENDERING_START && !audioOnlyPlayback) {
+                    logChannelSwitchStage(sourceRequestId, "first-frame");
                     videoRenderingStarted = true;
                     lastVideoOutputAt = SystemClock.elapsedRealtime();
                     playbackReadyRequestId = sourceRequestId;
@@ -7751,6 +7827,7 @@ public final class MainActivity extends Activity {
         }
         nextPlayer.setDataSource(directDataSource ? streamUrl
                 : directHttpMedia ? proxy.mediaUrl(streamUrl) : proxy.proxyUrl(streamUrl));
+        logChannelSwitchStage(sourceRequestId, "player-open-requested");
         nextPlayer.prepareAsync();
     }
 
@@ -8618,10 +8695,8 @@ public final class MainActivity extends Activity {
     }
 
     private int liveIjkLastBufferMs() {
-        if (LIVE_DELAY_LOW.equals(liveDelayMode)) {
-            return 5000;
-        }
-        return LIVE_DELAY_BALANCED.equals(liveDelayMode) ? 8000 : 12000;
+        // IJK's last-high-water-mark-ms option is capped at 5000 ms.
+        return 5000;
     }
 
     private void refreshUiScaleForViewport(int viewportWidth, int viewportHeight,
@@ -10499,6 +10574,8 @@ public final class MainActivity extends Activity {
             } catch (RuntimeException error) {
                 Log.w(TAG, "Unable to detach old player", error);
             }
+            final int releaseRequestId = playRequestId;
+            final long releaseQueuedAt = SystemClock.elapsedRealtime();
             Runnable release = new Runnable() {
                 @Override public void run() {
                     long started = SystemClock.elapsedRealtime();
@@ -10516,8 +10593,11 @@ public final class MainActivity extends Activity {
                     } catch (RuntimeException error) {
                         Log.w(TAG, "Unable to release old player", error);
                     }
-                    Log.i(TAG, "Background player release took "
-                            + (SystemClock.elapsedRealtime() - started) + "ms");
+                    long finished = SystemClock.elapsedRealtime();
+                    Log.i(TAG, "Background player release request=" + releaseRequestId
+                            + " queueMs=" + (started - releaseQueuedAt)
+                            + " runMs=" + (finished - started)
+                            + " elapsedMs=" + (finished - releaseQueuedAt));
                 }
             };
             if (oldPlayer instanceof AndroidMediaPlayer) {
@@ -10558,7 +10638,8 @@ public final class MainActivity extends Activity {
                     }
                 }, 8000L);
             } else PLAYER_RELEASE_WORKER.execute(release);
-            Log.i(TAG, "Player detach took " + (SystemClock.elapsedRealtime() - releaseStartedAt) + "ms");
+            Log.i(TAG, "Player detach request=" + releaseRequestId + " tookMs="
+                    + (SystemClock.elapsedRealtime() - releaseStartedAt));
         }
         activePlayerChannel = null;
         activePlayerStreamUrl = null;
