@@ -1,0 +1,6 @@
+#EXTM3U
+#EXT-X-VERSION:7
+#EXT-X-INDEPENDENT-SEGMENTS
+#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="aac",NAME="English",DEFAULT=YES,AUTOSELECT=YES,CHANNELS="2",URI="https://devstreaming-cdn.apple.com/videos/streaming/examples/adv_dv_atmos/Job932393e2-1e4f-4fdb-ab59-0d201f752656-107660254-Transcode_audio_en_stereo160_audio/prog_index.m3u8"
+#EXT-X-STREAM-INF:BANDWIDTH=5653463,AVERAGE-BANDWIDTH=3396166,VIDEO-RANGE=PQ,CODECS="hvc1.2.20000000.L123.B0,mp4a.40.2",RESOLUTION=1920x1080,FRAME-RATE=23.976,AUDIO="aac"
+https://devstreaming-cdn.apple.com/videos/streaming/examples/adv_dv_atmos/Job8208634a-0add-4223-9782-600c14a70339-139240443-hls_bundle_hdrhls765_hdr10plus/prog_index.m3u8

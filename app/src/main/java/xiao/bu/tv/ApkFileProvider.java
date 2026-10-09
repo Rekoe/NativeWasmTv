@@ -6,8 +6,6 @@ import android.content.Context;
 import android.database.Cursor;
 import android.database.MatrixCursor;
 import android.net.Uri;
-import android.os.Build;
-import android.os.Environment;
 import android.os.ParcelFileDescriptor;
 import android.provider.OpenableColumns;
 
@@ -20,8 +18,11 @@ public final class ApkFileProvider extends ContentProvider {
     private static final String PATH_UPDATES = "updates";
 
     static File updateDirectory(Context context) {
-        File base = context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS);
-        if (base == null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+        // Old TVs may have no mounted external storage or deny storage permission.
+        // Keep the received APK private on every API level. Installation uses a
+        // provider grant or a dedicated readable copy for old OEM installers.
+        File base = context.getFilesDir();
+        if (base == null) {
             base = context.getCacheDir();
         }
         return base == null ? null : new File(base, PATH_UPDATES);

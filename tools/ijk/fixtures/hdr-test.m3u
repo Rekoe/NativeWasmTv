@@ -1,0 +1,11 @@
+#EXTM3U
+#EXTINF:-1 group-title="HDR 样片",HDR10+ 1080p 24fps（视频轨）
+https://devstreaming-cdn.apple.com/videos/streaming/examples/adv_dv_atmos/Job8208634a-0add-4223-9782-600c14a70339-139240443-hls_bundle_hdrhls765_hdr10plus/prog_index.m3u8
+#EXTINF:-1 group-title="HDR 样片",HDR10+ 4K 24fps（视频轨）
+https://devstreaming-cdn.apple.com/videos/streaming/examples/adv_dv_atmos/Job8208634a-0add-4223-9782-600c14a70339-139240443-hls_bundle_hdrhls797_hdr10plus/prog_index.m3u8
+#EXTINF:-1 group-title="SDR 对照",SDR 1080p 24fps H264（视频轨）
+https://devstreaming-cdn.apple.com/videos/streaming/examples/adv_dv_atmos/Job2dae5735-d6ca-48ca-91be-0ec0bead535c-107702578-hls_bundle_hls290/prog_index.m3u8
+#EXTINF:-1 group-title="SDR 对照",SDR 480x270 24fps H264（视频轨）
+https://devstreaming-cdn.apple.com/videos/streaming/examples/adv_dv_atmos/Job2dae5735-d6ca-48ca-91be-0ec0bead535c-107702578-hls_bundle_hls203/prog_index.m3u8
+#EXTINF:-1 group-title="自动选择",Apple 自动画质含音轨（可能选择SDR）
+https://devstreaming-cdn.apple.com/videos/streaming/examples/adv_dv_atmos/main.m3u8

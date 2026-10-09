@@ -4,8 +4,6 @@ import android.app.Activity;
 import android.app.AlertDialog;
 import android.app.ProgressDialog;
 import android.content.DialogInterface;
-import android.content.Intent;
-import android.net.Uri;
 import android.os.Build;
 import android.util.Log;
 import android.view.KeyEvent;
@@ -530,20 +528,7 @@ final class AutoUpdater {
 
     private void launchInstaller(File apk) {
         try {
-            Uri uri;
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                uri = ApkFileProvider.uriForFile(activity, apk);
-            } else {
-                apk.setReadable(true, false);
-                uri = Uri.fromFile(apk);
-            }
-            Intent intent = new Intent(Intent.ACTION_VIEW);
-            intent.setDataAndType(uri, "application/vnd.android.package-archive");
-            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-            }
-            activity.startActivity(intent);
+            ApkTransferInstaller.launchInstaller(activity, apk);
         } catch (Exception error) {
             Log.e(TAG, "Unable to launch package installer", error);
             Toast.makeText(activity, R.string.update_install_failed, Toast.LENGTH_LONG).show();
