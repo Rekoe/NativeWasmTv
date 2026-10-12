@@ -5,7 +5,8 @@ static void ntv_hdr_render_uniforms(IJK_GLES2_Renderer *renderer,SDL_VoutOverlay
 {
     float kr = 0.2126f, kb = 0.0722f;
     if (overlay->ntv_colorspace == 9) { kr = 0.2627f; kb = 0.0593f; }
-    else if (overlay->ntv_colorspace == 5 || overlay->ntv_colorspace == 6) { kr = 0.299f; kb = 0.114f; }
+    else if (overlay->ntv_colorspace == 5 || overlay->ntv_colorspace == 6
+            || (overlay->ntv_colorspace == 2 && overlay->h <= 576)) { kr = 0.299f; kb = 0.114f; }
     int ten = overlay->format == SDL_FCC_I444P10LE;
     float maximum = ten ? 1023.f : 255.f;
     float y = overlay->ntv_full_range ? 1.f : maximum / (ten ? 876.f : 219.f);
@@ -16,7 +17,9 @@ static void ntv_hdr_render_uniforms(IJK_GLES2_Renderer *renderer,SDL_VoutOverlay
     glUniformMatrix3fv(renderer->um3_color_conversion,1,GL_FALSE,matrix);
     glUniform3f(renderer->ntv_yuv_offset,overlay->ntv_full_range ? 0.f : (ten ? 64.f : 16.f)/maximum,
             (ten ? 512.f : 128.f)/maximum,(ten ? 512.f : 128.f)/maximum);
-    glUniform1f(renderer->ntv_transfer,overlay->ntv_transfer == 16 ? 6.f : overlay->ntv_transfer == 18 ? 7.f : 0.f);
+    glUniform1f(renderer->ntv_transfer,overlay->ntv_transfer == 16 ? 6.f
+            : overlay->ntv_transfer == 18 ? 7.f
+            : overlay->ntv_colorspace == 9 ? (overlay->ntv_transfer == 8 ? 1.f : 3.f) : 0.f);
     glUniform1f(renderer->ntv_peak,overlay->ntv_peak > 0 ? overlay->ntv_peak : 1000.f);
 }
 #endif

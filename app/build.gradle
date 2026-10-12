@@ -158,8 +158,9 @@ android {
     }
 
     aaptOptions {
-        // Keep AAPT's default exclusions and omit management-site authoring docs.
-        ignoreAssetsPattern '!.svn:!.git:!.ds_store:!*.scc:.*:<dir>_*:!CVS:!thumbs.db:!picasa.ini:!*~:README.md'
+        // Keep AAPT's defaults. Debug pages need HTML/JS, not authoring reports
+        // or the device-matrix CSV/screenshots; release pages stay remote.
+        ignoreAssetsPattern '!.svn:!.git:!.ds_store:!*.scc:.*:<dir>_*:!CVS:!thumbs.db:!picasa.ini:!*~:!*.md:!ku9-device-matrix-*'
     }
 }
 

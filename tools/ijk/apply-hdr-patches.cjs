@@ -44,10 +44,16 @@ module.exports = function applyHdr(root) {
     fs.writeFileSync(path.join(root,'ijkmedia/ijksdl/gles2/ntv_hdr_glsl.h'),
         '/* Generated from app/src/main/res/raw/hdr_tonemap.glsl; LGPL-2.1-or-later. */\n#define NTV_HDR_GLSL '+JSON.stringify(glsl)+'\n');
     const codec = 'ijkmedia/ijkplayer/android/pipeline/ffpipenode_android_mediacodec_vdec.c';
+    const codecTarget = path.join(root,codec);
+    const oldCodec = fs.readFileSync(codecTarget,'utf8');
+    const migratedCodec = oldCodec.replace(
+        'ntv_hdr_codec_format(opaque->input_aformat,opaque->codecpar,ffp->is->video_st,opaque->avctx,ffp->ntv_hdr_mode);',
+        'ntv_hdr_codec_format(opaque->input_aformat,opaque->codecpar,ffp->is->video_st,opaque->avctx,ffp->ntv_hdr_mode,ffp->ntv_source_preferred_transfer);');
+    if (oldCodec !== migratedCodec) fs.writeFileSync(codecTarget,migratedCodec);
     edit(codec,'#include "../../ntv_dolby_vision.h"','#include "../../ntv_hdr_codec.h"\n#include "../../ntv_dolby_vision.h"');
     edit(codec,'    if (opaque->codecpar->extradata && opaque->codecpar->extradata_size > 0) {',
         `    if (strcmp(opaque->mcc.mime_type,"video/dolby-vision"))
-        ntv_hdr_codec_format(opaque->input_aformat,opaque->codecpar,ffp->is->video_st,opaque->avctx,ffp->ntv_hdr_mode);
+        ntv_hdr_codec_format(opaque->input_aformat,opaque->codecpar,ffp->is->video_st,opaque->avctx,ffp->ntv_hdr_mode,ffp->ntv_source_preferred_transfer);
     if (opaque->codecpar->extradata && opaque->codecpar->extradata_size > 0) {`);
     const jni = 'ijkmedia/ijkplayer/android/ijkplayer_jni.c';
     edit(jni,'extern void ntv_codec_jni_init(JNIEnv *env);','extern void ntv_codec_jni_init(JNIEnv *env);\nextern void ntv_hdr_jni_init(JNIEnv *env);');
@@ -98,8 +104,20 @@ module.exports = function applyHdr(root) {
     const fill = 'ijkmedia/ijksdl/ffmpeg/ijksdl_vout_overlay_ffmpeg.c';
     edit(fill,'static int func_fill_frame(SDL_VoutOverlay *overlay, const AVFrame *frame)',
         '#include "libavutil/mastering_display_metadata.h"\n\nstatic int func_fill_frame(SDL_VoutOverlay *overlay, const AVFrame *frame)');
+    // Migrate the old field block before matching the complete insertion. Also
+    // repair checkouts touched by the earlier split migration without duplicating
+    // the declarations on a second application.
+    const fillTarget = path.join(root,fill);
+    const oldFill = fs.readFileSync(fillTarget,'utf8').replace(/\r\n/g,'\n');
+    let blocks = 0;
+    const migratedFill = oldFill.replace(
+        /    overlay->ntv_colorspace = [\s\S]*?    overlay->ntv_peak = FFMAX\(100\.f,FFMIN\(10000\.f,overlay->ntv_peak\)\);/g,
+        block => ++blocks === 1 ? block : '').replace('    overlay->ntv_colorspace = frame->colorspace;',
+        '    overlay->ntv_colorspace = frame->colorspace == AVCOL_SPC_UNSPECIFIED\n            && frame->color_primaries == AVCOL_PRI_BT2020 ? AVCOL_SPC_BT2020_NCL : frame->colorspace;');
+    if (oldFill !== migratedFill) fs.writeFileSync(fillTarget,migratedFill);
     edit(fill,'    AVFrame swscale_dst_pic = { { 0 } };',`    AVFrame swscale_dst_pic = { { 0 } };
-    overlay->ntv_colorspace = frame->colorspace;
+    overlay->ntv_colorspace = frame->colorspace == AVCOL_SPC_UNSPECIFIED
+            && frame->color_primaries == AVCOL_PRI_BT2020 ? AVCOL_SPC_BT2020_NCL : frame->colorspace;
     overlay->ntv_transfer = frame->color_trc;
     overlay->ntv_full_range = frame->color_range == AVCOL_RANGE_JPEG;
     overlay->ntv_peak = 1000.f;
@@ -116,6 +134,11 @@ module.exports = function applyHdr(root) {
     }
     overlay->ntv_peak = FFMAX(100.f,FFMIN(10000.f,overlay->ntv_peak));`);
     const player = 'ijkmedia/ijkplayer/ff_ffplay.c';
+    const oldFrameCondition = '    if (src_frame->color_trc == AVCOL_TRC_SMPTE2084 || src_frame->color_trc == AVCOL_TRC_ARIB_STD_B67) {';
+    const gamutFrameCondition = '    if (src_frame->color_trc == AVCOL_TRC_SMPTE2084 || src_frame->color_trc == AVCOL_TRC_ARIB_STD_B67\n            || src_frame->colorspace == AVCOL_SPC_BT2020_NCL) {';
+    const playerSource = fs.readFileSync(path.join(root,player),'utf8').replace(/\r\n/g,'\n');
+    if (playerSource.includes(oldFrameCondition))
+        fs.writeFileSync(path.join(root,player),playerSource.replace(oldFrameCondition,gamutFrameCondition));
     // Software decoding cannot emit native HDR Surface buffers. In hardware mode
     // its fallback retains tone mapping; BT.709 explicitly bypasses it in both paths.
     edit(player,'        /* update the bitmap content */',`        if (ffp->ntv_hdr_mode == 2 && vp->bmp->format != SDL_FCC__AMC) {
@@ -124,11 +147,14 @@ module.exports = function applyHdr(root) {
         }
         /* update the bitmap content */`);
     edit(player,'    /* alloc or resize hardware picture buffer */',`    /* HDR software frames need YUV + GPU tone mapping, not swscale RGB. */
-    if (src_frame->color_trc == AVCOL_TRC_SMPTE2084 || src_frame->color_trc == AVCOL_TRC_ARIB_STD_B67) {
+    if (src_frame->color_trc == AVCOL_TRC_SMPTE2084 || src_frame->color_trc == AVCOL_TRC_ARIB_STD_B67
+            || src_frame->colorspace == AVCOL_SPC_BT2020_NCL) {
         ffp->overlay_format = SDL_FCC__GLES2;
         SDL_VoutSetOverlayFormat(ffp->vout,SDL_FCC__GLES2);
     }
     /* alloc or resize hardware picture buffer */`);
+    edit(player, '    /* HDR software frames need YUV + GPU tone mapping, not swscale RGB. */',
+        '    ntv_restore_frame_transfer(is->video_st,src_frame);\n    /* HDR software frames need YUV + GPU tone mapping, not swscale RGB. */');
     const internal = 'ijkmedia/ijksdl/gles2/internal.h';
     const window = 'ijkmedia/ijksdl/android/ijksdl_vout_android_nativewindow.c';
     edit(window,'    IJK_EGL         *egl;', '    int ntv_hdr_checked;\n    IJK_EGL         *egl;');

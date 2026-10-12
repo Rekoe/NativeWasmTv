@@ -9,6 +9,8 @@
 typedef struct NtvStreamTiming {
     int source_serial, source_count;
     double source_first, source_last;
+    int64_t source_slots[40];
+    unsigned source_counts[40];
     volatile float source_fps;
     int64_t output_start_ms, output_last_ms;
     int64_t output_slots[20];
@@ -30,24 +32,36 @@ static inline void ntv_source_frame(NtvStreamTiming *s, double dts, int serial)
 {
     if (!isfinite(dts)) return;
     if (!s->source_count || serial != s->source_serial
-            || dts <= s->source_last || dts - s->source_last > 1.0) {
-        if (serial != s->source_serial) s->source_fps = 0;
+            || dts < s->source_last - 1.0 || dts > s->source_last + 1.0) {
+        s->source_fps = 0;
+        memset(s->source_counts, 0, sizeof(s->source_counts));
+        memset(s->source_slots, 0, sizeof(s->source_slots));
         s->source_serial = serial;
         s->source_first = s->source_last = dts;
-        s->source_count = 1;
-        return;
+        s->source_count = 0;
     }
-    s->source_last = dts;
+    if (dts > s->source_last) s->source_last = dts;
     ++s->source_count;
-    double span = dts - s->source_first;
-    if (span >= 1.0 && s->source_count >= 8) {
-        double fps = (s->source_count - 1) / span;
-        if (fps >= 1 && fps <= 240) s->source_fps = fps;
-        if (span >= 2.0) {
-            s->source_first = dts;
-            s->source_count = 1;
-        }
+    int64_t slot = (int64_t)floor(dts * 10.0 + 0.000001);
+    int index = (int)((slot % 40 + 40) % 40);
+    if (s->source_slots[index] != slot) {
+        s->source_slots[index] = slot;
+        s->source_counts[index] = 0;
     }
+    ++s->source_counts[index];
+    /* Container timestamps may be reordered by B pictures, even in DTS fields.
+     * Count completed media-time bins, allowing one second for reordering.
+     * Never use download arrival time or multiply encoded frames into fields. */
+    int64_t end = (int64_t)floor(s->source_last * 10.0 + 0.000001) - 10;
+    int64_t begin = (int64_t)ceil(s->source_first * 10.0 - 0.000001);
+    if (begin < end - 20) begin = end - 20;
+    if (end - begin < 10) return;
+    unsigned count = 0;
+    for (int i = 0; i < 40; ++i)
+        if (s->source_slots[i] >= begin && s->source_slots[i] < end)
+            count += s->source_counts[i];
+    float fps = count * 10.0f / (end - begin);
+    if (fps >= 1 && fps <= 240) s->source_fps = fps;
 }
 
 static inline void ntv_output_frame(NtvStreamTiming *s, int64_t ms, double pts, int serial)

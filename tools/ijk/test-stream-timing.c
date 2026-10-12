@@ -11,6 +11,17 @@ int main(void)
     assert(fabs(s.source_fps - 25) < .01);
     for (int i = 0; i <= 200; ++i) ntv_source_frame(&s, 100.0 + i * .02, 2);
     assert(fabs(s.source_fps - 50) < .01);
+    /* Reordered Matroska timestamps must not reset source measurement. */
+    for (int i = 0; i < 150; i += 3) {
+        ntv_source_frame(&s, 500 + (i + 2) * .04, 4);
+        ntv_source_frame(&s, 500 + i * .04, 4);
+        ntv_source_frame(&s, 500 + (i + 1) * .04, 4);
+    }
+    assert(fabs(s.source_fps - 25) < .01);
+    ntv_source_frame(&s, 200, 4); /* true discontinuity, same serial */
+    assert(s.source_fps == 0);
+    for (int i = 1; i <= 150; ++i) ntv_source_frame(&s, 200 + i * .02, 4);
+    assert(fabs(s.source_fps - 50) < .01);
     ntv_source_frame(&s, NAN, 2);
     assert(fabs(s.source_fps - 50) < .01);
     /* Seeking/switching resets the measurement, never averages a PTS jump. */

@@ -4,6 +4,8 @@
 #include "ijksdl/android/ijksdl_codec_android_mediaformat.h"
 #include "libavutil/mastering_display_metadata.h"
 #include "libavutil/intreadwrite.h"
+#include "ntv_hevc_color.h"
+#include "ntv_h264_color.h"
 
 static const void *ntv_hdr_side_data(AVStream *stream, AVCodecContext *ctx,
         enum AVPacketSideDataType type, size_t minimum)
@@ -22,27 +24,51 @@ static unsigned ntv_hdr_scaled(AVRational value, double scale)
     return number > 65535 ? 65535 : number > 0 ? (unsigned)(number + 0.5) : 0;
 }
 static void ntv_hdr_codec_format(SDL_AMediaFormat *format, AVCodecParameters *par,
-        AVStream *stream, AVCodecContext *ctx, int mode)
+        AVStream *stream, AVCodecContext *ctx, int mode, int preferred_transfer)
 {
-    int standard = par->color_space == AVCOL_SPC_BT2020_NCL ? 6
-            : par->color_space == AVCOL_SPC_BT709 ? 1
-            : par->color_space == AVCOL_SPC_BT470BG ? 2
-            : par->color_space == AVCOL_SPC_SMPTE170M ? 4 : 0;
-    int transfer = par->color_trc == AVCOL_TRC_SMPTE2084 ? 6
-            : par->color_trc == AVCOL_TRC_ARIB_STD_B67 ? 7
-            : par->color_trc == AVCOL_TRC_LINEAR ? 1
-            : par->color_trc == AVCOL_TRC_BT709 || par->color_trc == AVCOL_TRC_SMPTE170M
-                || par->color_trc == AVCOL_TRC_BT2020_10 || par->color_trc == AVCOL_TRC_BT2020_12 ? 3 : 0;
+    int matrix = ctx && ctx->colorspace != AVCOL_SPC_UNSPECIFIED ? ctx->colorspace : par->color_space;
+    int trc = ctx && ctx->color_trc != AVCOL_TRC_UNSPECIFIED ? ctx->color_trc : par->color_trc;
+    int primaries = ctx && ctx->color_primaries != AVCOL_PRI_UNSPECIFIED ? ctx->color_primaries : par->color_primaries;
+    int range = ctx && ctx->color_range ? ctx->color_range : par->color_range;
+    int source_profile = par->profile;
+    NtvHevcColor color;
+    if (par->codec_id == AV_CODEC_ID_HEVC)
+        ALOGI("nTv HEVC input transfer: stream=%d context=%d",par->color_trc,ctx ? ctx->color_trc : -1);
+    if ((par->codec_id == AV_CODEC_ID_HEVC
+            && ntv_hevc_extradata_color(par->extradata,par->extradata_size,&color))
+            || (par->codec_id == AV_CODEC_ID_H264
+            && ntv_h264_extradata_color(par->extradata,par->extradata_size,&color))) {
+        if (color.matrix != 2) matrix = color.matrix;
+        trc = ntv_hevc_stream_transfer(trc, &color);
+        if (color.primaries != 2) primaries = color.primaries;
+        if (color.range) range = color.range;
+        if (color.depth) source_profile = color.profile;
+    }
+    /* Opening FFmpeg's codec may re-export the SPS VUI into codecpar, so retain
+     * the independently validated first-access-unit SEI across that step. */
+    if (par->codec_id == AV_CODEC_ID_HEVC && ntv_hevc_valid_transfer(preferred_transfer))
+        trc = preferred_transfer;
+    int standard = matrix == AVCOL_SPC_BT2020_NCL ? 6
+            : matrix == AVCOL_SPC_BT709 ? 1
+            : matrix == AVCOL_SPC_BT470BG ? 2
+            : matrix == AVCOL_SPC_SMPTE170M ? 4
+            : matrix == AVCOL_SPC_UNSPECIFIED && primaries == AVCOL_PRI_BT2020 ? 6 : 0;
+    int transfer = trc == AVCOL_TRC_SMPTE2084 ? 6
+            : trc == AVCOL_TRC_ARIB_STD_B67 ? 7
+            : trc == AVCOL_TRC_LINEAR ? 1
+            : trc == AVCOL_TRC_BT709 || trc == AVCOL_TRC_SMPTE170M
+                || trc == AVCOL_TRC_BT2020_10 || trc == AVCOL_TRC_BT2020_12 ? 3 : 0;
     SDL_AMediaFormat_setInt32(format,"ntv-hdr-mode",mode);
     SDL_AMediaFormat_setInt32(format,"ntv-source-standard",standard);
     SDL_AMediaFormat_setInt32(format,"ntv-source-transfer",transfer);
     if (mode == 2) { standard = 1; transfer = 3; }
     if (standard) SDL_AMediaFormat_setInt32(format,"color-standard",standard);
     if (transfer) SDL_AMediaFormat_setInt32(format,"color-transfer",transfer);
-    if (par->color_range != AVCOL_RANGE_UNSPECIFIED)
-        SDL_AMediaFormat_setInt32(format,"color-range",par->color_range == AVCOL_RANGE_JPEG ? 1 : 2);
-    if (par->codec_id == AV_CODEC_ID_HEVC && par->profile == FF_PROFILE_HEVC_MAIN_10)
-        SDL_AMediaFormat_setInt32(format,"profile",2); /* MediaCodec HEVCProfileMain10 */
+    if (range != AVCOL_RANGE_UNSPECIFIED)
+        SDL_AMediaFormat_setInt32(format,"color-range",range == AVCOL_RANGE_JPEG ? 1 : 2);
+    if (par->codec_id == AV_CODEC_ID_HEVC
+            && (source_profile == FF_PROFILE_HEVC_MAIN || source_profile == FF_PROFILE_HEVC_MAIN_10))
+        SDL_AMediaFormat_setInt32(format,"profile",source_profile); /* Main=1, Main10=2 */
     const AVMasteringDisplayMetadata *mastering = ntv_hdr_side_data(stream,ctx,
             AV_PKT_DATA_MASTERING_DISPLAY_METADATA,sizeof(*mastering));
     const AVContentLightMetadata *light = ntv_hdr_side_data(stream,ctx,
