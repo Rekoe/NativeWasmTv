@@ -11,6 +11,8 @@ typedef struct NtvStreamTiming {
     double source_first, source_last;
     int64_t source_slots[40];
     unsigned source_counts[40];
+    double source_recent[256];
+    unsigned source_recent_count, source_recent_next;
     volatile float source_fps;
     int64_t output_start_ms, output_last_ms;
     int64_t output_slots[20];
@@ -39,7 +41,15 @@ static inline void ntv_source_frame(NtvStreamTiming *s, double dts, int serial)
         s->source_serial = serial;
         s->source_first = s->source_last = dts;
         s->source_count = 0;
+        s->source_recent_count = s->source_recent_next = 0;
     }
+    /* Repeated packets/samples do not represent new pictures. Keep recent
+     * timestamps rather than just the last one, because B pictures reorder. */
+    for (unsigned i = 0; i < s->source_recent_count; ++i)
+        if (s->source_recent[i] == dts) return;
+    s->source_recent[s->source_recent_next] = dts;
+    s->source_recent_next = (s->source_recent_next + 1) & 255;
+    if (s->source_recent_count < 256) ++s->source_recent_count;
     if (dts > s->source_last) s->source_last = dts;
     ++s->source_count;
     int64_t slot = (int64_t)floor(dts * 10.0 + 0.000001);

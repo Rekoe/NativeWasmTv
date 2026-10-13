@@ -30,8 +30,13 @@ final class HdrDisplayPolicyTest {
             require(HdrDisplayPolicy.decoderToneMapping(mode,sdk)==(sdk>=31), "Modern SDR fallback can request decoder mapping");
             require(!HdrDisplayPolicy.passthrough(mode,6,new int[0],sdk), "SDR screen never gets HDR passthrough");
         }
-        require(HdrMode.nativeValue("passthrough")==1, "Manual HDR passthrough remains available");
-        require("passthrough".equals(HdrMode.sanitize("passthrough")), "Manual HDR preference survives reload");
+        require(HdrMode.nativeValue("passthrough")==1, "Legacy HDR preference keeps the same output policy");
+        require(HdrMode.DEFAULT.equals(HdrMode.sanitize("passthrough")), "Duplicate HDR preference migrates to auto");
+        require(HdrMode.nativeValue(HdrMode.sanitize("passthrough"))==HdrMode.nativeValue("passthrough"),
+                "Preference migration preserves playback output");
+        require(HdrMode.nativeValue("mapping")==0, "SDR mapping remains distinct from forced GPU mapping");
+        require(HdrDisplayPolicy.decoderToneMapping(0,31), "SDR mapping uses decoder conversion on modern Android");
+        require(!HdrDisplayPolicy.decoderToneMapping(0,30), "SDR mapping uses GPU conversion on older Android");
         require(!HdrDisplayPolicy.passthrough(1,7,new int[]{3},25), "Android 7 HDR path is unverified");
         System.out.println("HDR display compatibility policy passed");
     }
