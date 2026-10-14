@@ -6,6 +6,8 @@
 
 typedef struct NtvHevcColor {
     int depth, primaries, transfer, matrix, range, profile, preferred_transfer;
+    int scan; /* 0 unknown, 1 progressive source, 2 interlaced source; no field-order guess. */
+    int width, height; /* cropped SPS dimensions, for discovery without pixel decoding */
 } NtvHevcColor;
 static int ntv_hevc_valid_transfer(int value)
 {
@@ -79,7 +81,10 @@ static int ntv_hevc_sps_color(const uint8_t *nal, unsigned size, NtvHevcColor *o
     if (layers > 6) return 0;
     ntv_hevc_skip(&b, 1 + 3); /* nesting, profile space, tier */
     value.profile = ntv_hevc_bits(&b, 5);
-    ntv_hevc_skip(&b, 88); /* compatibility, constraints, level */
+    ntv_hevc_skip(&b, 32); /* profile compatibility */
+    unsigned progressive = ntv_hevc_bits(&b, 1), interlaced = ntv_hevc_bits(&b, 1);
+    if (progressive != interlaced) value.scan = progressive ? 1 : 2;
+    ntv_hevc_skip(&b, 54); /* remaining constraints, level */
     unsigned profiles[7] = {0}, levels[7] = {0};
     for (unsigned i = 0; i < layers; ++i) {
         profiles[i] = ntv_hevc_bits(&b, 1); levels[i] = ntv_hevc_bits(&b, 1);
@@ -92,10 +97,18 @@ static int ntv_hevc_sps_color(const uint8_t *nal, unsigned size, NtvHevcColor *o
     if (ntv_hevc_ue(&b) > 15) return 0;
     unsigned chroma = ntv_hevc_ue(&b);
     if (chroma > 3) return 0;
-    if (chroma == 3) ntv_hevc_skip(&b, 1);
+    if (chroma == 3 && ntv_hevc_bits(&b, 1)) chroma = 0;
     unsigned width = ntv_hevc_ue(&b), height = ntv_hevc_ue(&b);
     if (!width || !height || width > 65535 || height > 65535) return 0;
-    if (ntv_hevc_bits(&b, 1)) for (int i = 0; i < 4; ++i) ntv_hevc_ue(&b);
+    uint64_t crop_x = 0, crop_y = 0;
+    if (ntv_hevc_bits(&b, 1)) {
+        crop_x = (uint64_t)ntv_hevc_ue(&b) + ntv_hevc_ue(&b);
+        crop_y = (uint64_t)ntv_hevc_ue(&b) + ntv_hevc_ue(&b);
+        crop_x *= chroma == 1 || chroma == 2 ? 2 : 1;
+        crop_y *= chroma == 1 ? 2 : 1;
+    }
+    if (b.error || crop_x >= width || crop_y >= height) return 0;
+    value.width = width - crop_x; value.height = height - crop_y;
     unsigned depth = ntv_hevc_ue(&b), chroma_depth = ntv_hevc_ue(&b);
     if (depth > 8 || chroma_depth > 8 || (chroma && depth != chroma_depth)) return 0;
     value.depth = depth + 8;
@@ -156,6 +169,9 @@ static int ntv_hevc_sps_color(const uint8_t *nal, unsigned size, NtvHevcColor *o
                 value.matrix = ntv_hevc_bits(&b, 8);
             }
         }
+        if (ntv_hevc_bits(&b, 1)) { ntv_hevc_ue(&b); ntv_hevc_ue(&b); } /* chroma location */
+        ntv_hevc_skip(&b, 1); /* neutral chroma */
+        if (ntv_hevc_bits(&b, 1)) value.scan = 2; /* field_seq_flag */
     }
     if (b.error) return 0;
     *out = value;

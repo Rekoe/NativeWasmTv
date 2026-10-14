@@ -10,13 +10,13 @@ import java.io.*;import java.net.*;import java.util.*;
 class NetworkClient {
  static HttpURLConnection openBounded(URL url,int timeout)throws IOException {if(timeout<=0||timeout>12000)throw new AssertionError("Unbounded probe");return open(url);}
  static Map<String,Reply> replies=new HashMap<>();static int bytesRead,opens,closed;
- static class Reply {int status=200;String type,location;byte[] body;int chunk=65536;
+ static class Reply {int status=200;String type,location;byte[] body;int chunk=65536,failures;
   Reply(String t,byte[] b){type=t;body=b;}}
  static HttpURLConnection open(URL url)throws IOException {
   final Reply r=replies.get(url.toString());if(r==null)throw new IOException("Unexpected URL "+url);opens++;
   return new HttpURLConnection(url){
    public void connect(){}public void disconnect(){closed++;}public boolean usingProxy(){return false;}
-   public int getResponseCode(){return r.status;}public String getContentType(){return r.type;}
+   public int getResponseCode()throws IOException{if(r.failures-->0)throw new EOFException("socket closed before headers");return r.status;}public String getContentType(){return r.type;}
    public String getHeaderField(String key){return "Location".equals(key)?r.location:null;}
    public InputStream getInputStream(){return new ByteArrayInputStream(r.body){
     public synchronized int read(byte[] b,int off,int len){int n=super.read(b,off,Math.min(len,r.chunk));if(n>0)bytesRead+=n;return n;}
@@ -45,6 +45,9 @@ public class HttpContentRoutingCheck {
   }
   HttpStreamResolver.Result r=test("no-suffix","text/html",text("#EXTM3U\n#EXTINF:5,\npart.ts\n"),1);
   check(!r.webPage&&!r.directMedia,"HLS body must beat HTML MIME");
+  r=test("video.sdp","application/sdp",text("v=0\r\no=- 0 0 IN IP4 127.0.0.1\r\ns=RTP fixture\r\nm=video 40120 RTP/AVP 96\r\na=rtpmap:96 H264/90000\r\n"),2);
+  check(r.directMedia&&!r.webPage,"SDP must reach the native RTP demuxer");
+  r=test("fake.sdp","application/sdp",page,2);check(r.webPage&&!r.directMedia,"HTML still beats SDP MIME");
   byte[] mp4={0,0,0,24,'f','t','y','p','i','s','o','m',0,0,0,0};
   r=test("movie.html","text/html",mp4,1);check(r.directMedia&&!r.webPage,"MP4 body must beat HTML MIME");
   byte[] ts=new byte[1024];ts[0]=ts[188]=ts[376]=0x47;
@@ -84,6 +87,10 @@ public class HttpContentRoutingCheck {
   NetworkClient.Reply bad=new NetworkClient.Reply("text/html",page);bad.status=404;
   NetworkClient.replies.put("http://fixture.test/missing.m3u8",bad);
   try{HttpStreamResolver.resolve("http://fixture.test/missing.m3u8");throw new AssertionError("404 must not look playable");}catch(IOException expected){}
+  NetworkClient.Reply transientReply=new NetworkClient.Reply("audio/mpeg",text("ID3 media fixture"));transientReply.failures=1;
+  NetworkClient.replies.put("http://fixture.test/transient.mp3",transientReply);NetworkClient.opens=NetworkClient.closed=0;
+  r=HttpStreamResolver.resolve("http://fixture.test/transient.mp3");
+  check(r.directMedia && NetworkClient.opens==2 && NetworkClient.closed==2,"EOF retry must recover and close both connections");
   Thread.currentThread().interrupt();
   try{HttpStreamResolver.resolve("http://fixture.test/final.html");throw new AssertionError("Cancelled request continued");}catch(InterruptedIOException expected){}finally{Thread.interrupted();}
   System.out.println("PASS content routing: HTML/HLS/binary priority, fragmented prefix, redirects, JSON wrappers, bounded page probe, HTTP error and connection cleanup");

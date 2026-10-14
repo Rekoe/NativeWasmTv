@@ -70,6 +70,32 @@ static int ntv_hevc_probe_read(AVFormatContext *ic, AVPacket *pkt, NtvHevcProbeP
     }
     return av_read_frame(ic,pkt);
 }
+static void ntv_probe_dimensions(AVFormatContext *ic, int index)
+{
+    if (index < 0) return;
+    AVCodecParameters *par = ic->streams[index]->codecpar;
+    if (par->width > 0 && par->height > 0) return;
+    int h264 = par->codec_id == AV_CODEC_ID_H264;
+    if (!h264 && par->codec_id != AV_CODEC_ID_HEVC) return;
+    NtvHevcColor signal = {0};
+    int found = h264 ? ntv_h264_extradata_color(par->extradata,par->extradata_size,&signal)
+            : ntv_hevc_extradata_color(par->extradata,par->extradata_size,&signal);
+    found = found && signal.width > 0 && signal.height > 0;
+    unsigned bytes = 0;
+    for (unsigned n = 0; !found && n < 64 && bytes < 4*1024*1024; ++n) {
+        AVPacket pkt = {0}; av_init_packet(&pkt);
+        if (av_read_frame(ic,&pkt) < 0) { av_packet_unref(&pkt); break; }
+        bytes += pkt.size;
+        if (pkt.stream_index == index) found = h264
+                ? ntv_h264_packet_color(pkt.data,pkt.size,par->extradata,par->extradata_size,&signal)
+                : ntv_hevc_packet_color(pkt.data,pkt.size,par->extradata,par->extradata_size,&signal);
+        av_packet_unref(&pkt);
+        found = found && signal.width > 0 && signal.height > 0;
+    }
+    if (found && signal.width > 0 && signal.height > 0) {
+        par->width = signal.width; par->height = signal.height;
+    }
+}
 static void ntv_measure_source(FFPlayer *ffp, AVStream *st, AVPacket *pkt, int serial)
 {
     int structure = AV_PICTURE_STRUCTURE_UNKNOWN;
@@ -105,6 +131,7 @@ static void ntv_measure_source(FFPlayer *ffp, AVStream *st, AVPacket *pkt, int s
                     ctx->color_trc = color.transfer;
                     ctx->colorspace = color.matrix;
                     ctx->color_range = color.range;
+                    if (hevc && color.scan == 1) ctx->field_order = AV_FIELD_PROGRESSIVE;
                 }
                 if (color.preferred_transfer) ffp->ntv_source_preferred_transfer = color.preferred_transfer;
                 if (ffp->ntv_source_preferred_transfer) ctx->color_trc = ffp->ntv_source_preferred_transfer;

@@ -6,7 +6,7 @@ static void require(int ok,const char *reason)
 {if(!ok){fprintf(stderr,"FAIL: %s\n",reason);exit(1);}}
 int main(int argc,char **argv)
 {
-    require(argc==6,"fixture depth primaries transfer matrix");
+    require(argc==6 || argc==7 || argc==9,"fixture depth primaries transfer matrix [SPS scan [width height]]");
     FILE *file=fopen(argv[1],"rb");require(file!=NULL,"open fixture");
     uint8_t *data=malloc(4*1024*1024);require(data!=NULL,"buffer");
     unsigned size=fread(data,1,4*1024*1024,file);fclose(file);
@@ -15,6 +15,8 @@ int main(int argc,char **argv)
     printf("actual depth=%d primaries=%d transfer=%d matrix=%d\n",color.depth,color.primaries,color.transfer,color.matrix);
     require(color.depth==atoi(argv[2]) && color.primaries==atoi(argv[3])
             && color.transfer==atoi(argv[4]) && color.matrix==atoi(argv[5]),"actual source fields");
+    if(argc>=7)require(color.scan==atoi(argv[6]),"frame/field-capable SPS");
+    if(argc==9)require(color.width==atoi(argv[7]) && color.height==atoi(argv[8]),"cropped SPS dimensions");
     unsigned start=0,end=0;
     for(unsigned i=0;i+4<size;i++)if(!data[i]&&!data[i+1]&&data[i+2]==1&&(data[i+3]&31)==7) {
         start=i+3;end=start+1;

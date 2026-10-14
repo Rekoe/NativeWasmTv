@@ -24,10 +24,12 @@ typedef struct NtvStreamTiming {
 
 static inline int64_t ntv_output_stall_ms(const NtvStreamTiming *s)
 {
-    /* Sparse camera/video streams must survive their normal inter-frame gap. */
+    /* The source cadence is not the output cadence on an overloaded decoder.
+     * Allow a full measurement window even when a 25fps source drops to 2fps.
+     * Sparse camera/video streams also survive their normal inter-frame gap. */
     float fps = s->source_fps > 0 ? s->source_fps : 1.5f;
     int64_t ms = 3000 / fps;
-    return ms < 250 ? 250 : ms > 5000 ? 5000 : ms;
+    return ms < 1000 ? 1000 : ms > 5000 ? 5000 : ms;
 }
 
 static inline void ntv_source_frame(NtvStreamTiming *s, double dts, int serial)

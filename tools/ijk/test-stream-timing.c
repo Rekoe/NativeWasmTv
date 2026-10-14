@@ -46,7 +46,7 @@ int main(void)
     }
     assert(s.output_total == 200);
     assert(fabs(ntv_output_fps(&s, 4980) - 50) < .01);
-    assert(ntv_output_fps(&s, 5250) == 0); /* stopped/buffering */
+    assert(ntv_output_fps(&s, 6000) == 0); /* stopped/buffering */
     for (int i = 0; i < 100; ++i) ntv_output_frame(&s, 6000 + i * 40, i * .04, 2);
     assert(fabs(ntv_output_fps(&s, 9960) - 25) < .5);
     NtvStreamTiming sparse = {0};
@@ -54,6 +54,16 @@ int main(void)
     for (int i = 0; i < 6; ++i) ntv_output_frame(&sparse, 1000 + i * 1000, i, 1);
     assert(ntv_output_fps(&sparse, 6500) > .5);
     assert(ntv_output_fps(&sparse, 9100) == 0);
+    /* MT6580 drops frames under load: a 25fps source can submit a new
+     * picture every 400-600ms. Those are real low output FPS, not a stall.
+     * Restarting the one-second measurement every 250ms hid them forever. */
+    NtvStreamTiming slow = {0};
+    slow.source_fps = 25;
+    for (int i = 0; i < 12; ++i)
+        ntv_output_frame(&slow, 1000 + i * 450, i * .24, 1);
+    assert(ntv_output_fps(&slow, 6000) > 1.5f);
+    assert(ntv_output_fps(&slow, 6000) < 3.0f);
+    assert(ntv_output_fps(&slow, 7000) == 0);
     puts("stream timing: 25/30/50/150 fps, duplicate packets, discontinuity, repaint, stall PASS");
     return 0;
 }

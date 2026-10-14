@@ -41,6 +41,7 @@ module.exports = function applyVideoInfo(root) {
     if (oldPlay !== migratedPlay) fs.writeFileSync(playTarget,migratedPlay);
     edit(play,'    int st_index[AVMEDIA_TYPE_NB];\n    AVPacket pkt1, *pkt = &pkt1;',
             '    int st_index[AVMEDIA_TYPE_NB];\n    AVPacket pkt1, *pkt = &pkt1;\n    NtvHevcProbePackets ntv_hevc_probe = {0};');
+    if (!fs.readFileSync(playTarget,'utf8').includes('ffp->ntv_source_preferred_transfer = ntv_hevc_probe_initial(ic,st_index,&ntv_hevc_probe);'))
     edit(play,'    /* open the streams */',
             '    ffp->ntv_source_preferred_transfer = ntv_hevc_probe_initial(ic,st_index,&ntv_hevc_probe);\n    /* open the streams */');
     edit(play,'        ret = av_read_frame(ic, pkt);',

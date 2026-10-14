@@ -89,6 +89,8 @@ static uint32_t ntv_describe_video_header(AVStream *st, AVCodecContext *ctx, AVF
             ? (frame->top_field_first ? AV_FIELD_TT : AV_FIELD_BB) : AV_FIELD_PROGRESSIVE)
             : ctx && ctx->field_order != AV_FIELD_UNKNOWN ? ctx->field_order : par->field_order;
     if (order > AV_FIELD_BT) order = AV_FIELD_UNKNOWN;
+    if (order == AV_FIELD_UNKNOWN && hevc && signal.scan)
+        order = signal.scan == 1 ? AV_FIELD_PROGRESSIVE : 6; /* source fields; order unknown */
     return NTV_DESCRIPTION_AVAILABLE | inferred | (order << 27) | depth | ((primaries & 31) << 5)
             | ((transfer & 31) << 10) | ((matrix & 31) << 15)
             | ((range & 3) << 20) | (ntv_dovi_stream(st) ? 1U << 22 : 0);

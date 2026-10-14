@@ -25,12 +25,13 @@ static int ntv_h264_sps_color(const uint8_t *nal, unsigned size, NtvHevcColor *o
     color.profile = ntv_hevc_bits(&b,8);
     ntv_hevc_skip(&b,16);
     if (ntv_hevc_ue(&b) > 31) return 0;
+    unsigned chroma = 1, separate = 0;
     switch (color.profile) {
         case 100: case 110: case 122: case 244: case 44: case 83: case 86:
         case 118: case 128: case 138: case 139: case 134: case 135: {
-            unsigned chroma = ntv_hevc_ue(&b);
+            chroma = ntv_hevc_ue(&b);
             if (chroma > 3) return 0;
-            if (chroma == 3) ntv_hevc_skip(&b,1);
+            if (chroma == 3) separate = ntv_hevc_bits(&b,1);
             unsigned depth = ntv_hevc_ue(&b), chroma_depth = ntv_hevc_ue(&b);
             if (depth > 6 || chroma_depth > 6 || (chroma && depth != chroma_depth)) return 0;
             color.depth = depth + 8;
@@ -63,10 +64,22 @@ static int ntv_h264_sps_color(const uint8_t *nal, unsigned size, NtvHevcColor *o
     } else if (poc > 2) return 0;
     if (ntv_hevc_ue(&b) > 32) return 0;
     ntv_hevc_skip(&b,1);
-    if (ntv_hevc_ue(&b) > 4095 || ntv_hevc_ue(&b) > 4095) return 0;
-    if (!ntv_hevc_bits(&b,1)) ntv_hevc_skip(&b,1);
+    unsigned mbs_x = ntv_hevc_ue(&b), mbs_y = ntv_hevc_ue(&b);
+    if (mbs_x > 4095 || mbs_y > 4095) return 0;
+    unsigned frame_mbs_only = ntv_hevc_bits(&b,1);
+    color.scan = frame_mbs_only ? 1 : 2; /* SPS permits field-coded pictures. */
+    if (!frame_mbs_only) ntv_hevc_skip(&b,1);
     ntv_hevc_skip(&b,1);
-    if (ntv_hevc_bits(&b,1)) for (int i = 0; i < 4; ++i) ntv_hevc_ue(&b);
+    uint64_t width = (mbs_x + 1) * 16, height = (mbs_y + 1) * 16 * (2-frame_mbs_only);
+    uint64_t crop_x = 0, crop_y = 0;
+    if (ntv_hevc_bits(&b,1)) {
+        crop_x = (uint64_t)ntv_hevc_ue(&b) + ntv_hevc_ue(&b);
+        crop_y = (uint64_t)ntv_hevc_ue(&b) + ntv_hevc_ue(&b);
+        crop_x *= !separate && (chroma==1 || chroma==2) ? 2 : 1;
+        crop_y *= (2-frame_mbs_only) * (!separate && chroma==1 ? 2 : 1);
+    }
+    if (b.error || crop_x >= width || crop_y >= height) return 0;
+    color.width = width-crop_x; color.height = height-crop_y;
     if (ntv_hevc_bits(&b,1)) {
         if (ntv_hevc_bits(&b,1) && ntv_hevc_bits(&b,8) == 255) ntv_hevc_skip(&b,32);
         if (ntv_hevc_bits(&b,1)) ntv_hevc_skip(&b,1);

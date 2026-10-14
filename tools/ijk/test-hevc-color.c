@@ -30,7 +30,7 @@ int main(int argc, char **argv)
     NtvHevcColor compatible = {8,9,14,9,1,1,0};
     require(ntv_hevc_stream_transfer(18,&compatible) == 18,"decoded HLG wins SDR-compatible VUI");
     require(ntv_hevc_stream_transfer(2,&compatible) == 14,"no HDR guess from SDR VUI");
-    require(argc == 6,"file depth primaries transfer matrix");
+    require(argc == 6 || argc == 8,"file depth primaries transfer matrix [width height]");
     FILE *file = fopen(argv[1],"rb");
     require(file != NULL,"open fixture");
     uint8_t *data = malloc(8 * 1024 * 1024);
@@ -43,6 +43,7 @@ int main(int argc, char **argv)
             color.depth,color.primaries,color.transfer,color.matrix,color.range);
     require(color.depth == atoi(argv[2]) && color.primaries == atoi(argv[3])
             && color.transfer == atoi(argv[4]) && color.matrix == atoi(argv[5]),"source values");
+    if(argc==8)require(color.width==atoi(argv[6]) && color.height==atoi(argv[7]),"cropped SPS dimensions");
     unsigned start = 0, end = 0;
     for (unsigned i = 0; i + 5 < size; ++i)
         if (!data[i] && !data[i+1] && data[i+2] == 1 && ((data[i+3] >> 1) & 63) == 33) {
@@ -60,6 +61,27 @@ int main(int argc, char **argv)
     require(ntv_hevc_extradata_color(hvcc,28+length,&boxed),"hvcC SPS");
     NtvHevcColor sps = {0};
     require(ntv_hevc_sps_color(data+start,length,&sps),"isolated SPS");
+    require(sps.scan == 1,"progressive source flag survives Annex B / hvcC");
+    /* Re-encode the real SPS after changing only the two PTL source flags.
+     * Both flags equal means mixed/unspecified, never guess progressive. */
+    uint8_t rbsp[4096], changed[8192]; unsigned rbsp_size=0, zeros=0;
+    for(unsigned i=start+2;i<end;i++) {
+        if(zeros==2 && data[i]==3){zeros=0;continue;}
+        rbsp[rbsp_size++]=data[i];zeros=data[i]==0?zeros+1:0;
+    }
+    require(rbsp_size>6,"PTL present");
+    for(unsigned flags=0;flags<4;flags++) {
+        rbsp[6]=(rbsp[6]&63)|(flags<<6);
+        unsigned count=2;zeros=0;changed[0]=data[start];changed[1]=data[start+1];
+        for(unsigned i=0;i<rbsp_size;i++) {
+            if(zeros==2 && rbsp[i]<=3){changed[count++]=3;zeros=0;}
+            changed[count++]=rbsp[i];zeros=rbsp[i]==0?zeros+1:0;
+        }
+        NtvHevcColor classified={0};
+        require(ntv_hevc_sps_color(changed,count,&classified),"source flag variant parses");
+        require(classified.scan==(flags==2?1:flags==1?2:0),"PTL scan flags; unknown retained");
+        require(classified.depth==sps.depth && classified.transfer==sps.transfer,"scan changes preserve colour");
+    }
     require(memcmp(&sps,&boxed,sizeof(sps)) == 0,"hvcC matches isolated SPS");
     for (unsigned i = 0; i < 28+length; ++i)
         require(!ntv_hevc_extradata_color(hvcc,i,&boxed),"truncated hvcC rejected");

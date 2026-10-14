@@ -3,6 +3,8 @@ const fs = require('fs'), path = require('path');
 module.exports = function applyVodBuffer(root) {
   function edit(file, before, after) {
     const target=path.join(root,file), text=fs.readFileSync(target,'utf8').replace(/\r\n/g,'\n');
+    if(before==='    int ntv_frame_sync;' && text.includes('    int ntv_vod_buffer_mode;'))return;
+    if(before==='    { "ntv-frame-sync",' && text.includes('    { "ntv-vod-buffer-mode",'))return;
     if(text.includes(after))return;
     if(text.split(before).length!==2)throw new Error('Unexpected VOD buffering upstream: '+file);
     fs.writeFileSync(target,text.replace(before,after));
