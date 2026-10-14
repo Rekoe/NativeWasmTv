@@ -17,6 +17,7 @@ import socket
 import subprocess
 import threading
 import time
+from urllib.parse import parse_qs, urlsplit
 
 ROOT = Path(__file__).resolve().parents[2]
 OUT = ROOT / '.codex-tmp/hls-debug-matrix'
@@ -63,6 +64,26 @@ class MediaHandler(http.server.SimpleHTTPRequestHandler):
         except (BrokenPipeError,ConnectionResetError):
             # A channel switch deliberately cancels an in-flight download.
             pass
+
+def legacy_capture_handler(serial, directory):
+    """API 14-17 lacks UiAutomation; the authorized ADB shell captures the screen."""
+    class Handler(MediaHandler):
+        def do_GET(self):
+            request=urlsplit(self.path)
+            if request.path!='/__capture':return super().do_GET()
+            try:
+                index=int(parse_qs(request.query).get('index',['0'])[0])
+                if not 1<=index<=1000:raise ValueError('Invalid capture index')
+                folder=directory/'shell-captures';folder.mkdir(exist_ok=True)
+                target=folder/f'{index:04d}.png'
+                remote=f'/sdcard/Android/data/{PACKAGE}/files/shell-capture.png'
+                run([ADB,'-s',serial,'shell','screencap','-p',remote],timeout=20)
+                run([ADB,'-s',serial,'pull',remote,target],timeout=20)
+                body=target.read_bytes()
+                self.send_response(200);self.send_header('Content-Type','image/png')
+                self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body)
+            except Exception as error:self.send_error(500,str(error))
+    return Handler
 
 
 def run(command, **kwargs):
@@ -271,6 +292,44 @@ def lan_ip():
     with socket.socket(socket.AF_INET,socket.SOCK_DGRAM) as sock:
         sock.connect(('8.8.8.8',80));return sock.getsockname()[0]
 
+def replay_legacy_cases(serial, command, rows, report_name, directory, log, adb):
+    """Keep one wedged API 14-17 native decoder from swallowing the whole matrix."""
+    results=[]
+    for item in rows:
+        index=item['index'];name=f'{report_name[:-5]}-{index}.json'
+        case=command.copy();case[case.index('-e') : case.index('-e')]=['-e','onlyIndices',str(index)]
+        case[case.index('reportName')+1]=name
+        adb('shell','am','force-stop',PACKAGE)
+        process=subprocess.Popen(case,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,encoding='utf-8',errors='replace')
+        expired=threading.Event()
+        def abort():
+            if process.poll() is None:
+                expired.set()
+                try:run([ADB,'-s',serial,'shell','am','force-stop',PACKAGE],timeout=10)
+                finally:process.terminate()
+        budget=45 if item.get('category') in ('local','supplement') and '.mp4' in item['fixture'].lower() else 90
+        watchdog=threading.Timer(budget,abort);watchdog.start()
+        try:
+            for line in process.stdout:
+                log.write(line);log.flush();print(serial,line.rstrip(),flush=True)
+            process.wait(timeout=10)
+        finally:
+            watchdog.cancel()
+            if process.poll() is None:process.kill();process.wait(timeout=10)
+        path=directory/f'case-{index:04d}.json'
+        try:
+            adb('pull',f'/sdcard/Android/data/{PACKAGE}/files/{name}',path)
+            observed=json.loads(path.read_text(encoding='utf-8'))
+            row=observed[0] if len(observed)==1 else dict(index=index,name=item['name'],status='failed',error='Missing case result')
+        except Exception as error:row=dict(index=index,name=item['name'],status='failed',error='No case report: '+str(error))
+        if expired.is_set() or row.get('status')=='running':
+            previous=row.get('error','')
+            row.update(status='failed',hostTimeout=True,hostTimeoutSeconds=budget,
+                       error=(previous+'\n' if previous else '')+f'Native/UI test exceeded {budget}-second case deadline')
+        results.append(row)
+        (directory/'results.json').write_text(json.dumps(results,ensure_ascii=False,indent=2),encoding='utf-8')
+        print(serial,'CASE COMPLETE',index,row['status'],flush=True)
+
 
 def replay(serial, abi, formats, names=None, run_id='full', scripts=None, apk_dir=None):
     directory=OUT/serial.replace(':','_')/run_id;directory.mkdir(parents=True,exist_ok=True)
@@ -278,7 +337,7 @@ def replay(serial, abi, formats, names=None, run_id='full', scripts=None, apk_di
     sdk=int(adb('shell','getprop','ro.build.version.sdk').strip())
     packages=adb('shell','pm','list','packages',PACKAGE)
     if PACKAGE in packages:raise RuntimeError('Refusing to reuse an existing test app')
-    handler=functools.partial(MediaHandler,directory=str(OUT))
+    handler=functools.partial(legacy_capture_handler(serial,directory) if sdk<18 else MediaHandler,directory=str(OUT))
     server=http.server.ThreadingHTTPServer(('0.0.0.0',PORT),handler)
     thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
     base=f'http://127.0.0.1:{PORT}' if sdk>=21 else f'http://{lan_ip()}:{PORT}'
@@ -309,23 +368,27 @@ def replay(serial, abi, formats, names=None, run_id='full', scripts=None, apk_di
         command=[ADB,'-s',serial,'shell','am','instrument','-w','-e','routeThroughResolver',os.environ.get('NTV_RESOLVER','true'),
                  '-e','manifest','/data/local/tmp/ntv-media-matrix.json','-e','reportName',report_name,
                  PACKAGE+'.test/'+RUNNER]
+        if sdk<18:command[-1:-1]=['-e','captureEndpoint',base+'/__capture']
         trace_file=(directory/'player.log').open('w',encoding='utf-8')
         log_args=[ADB,'-s',serial,'logcat','-v','threadtime']
         if sdk>=21:log_args+=['-T','1']
         trace=subprocess.Popen(log_args+['-s','IJKMEDIA:V' if os.environ.get('NTV_VERBOSE_PLAYER')=='1' else 'IJKMEDIA:I','MainActivity:I','nTvHdr:I','HlsProxyServer:I'],stdout=trace_file,stderr=subprocess.STDOUT)
         with (directory/'instrumentation.txt').open('w',encoding='utf-8') as log:
-            process=subprocess.Popen(command,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,encoding='utf-8',errors='replace')
-            if os.environ.get('NTV_TEST_FOREGROUND')=='1':
-                # MIUI can leave startActivitySync waiting behind its background
-                # launch policy. A normal explicit shell launch presents the app.
-                time.sleep(1)
-                adb('shell','am','start','-n',PACKAGE+'/xiao.bu.tv.MainActivity')
-            for line in process.stdout:
-                log.write(line);log.flush();print(serial,line.rstrip(),flush=True)
-            process.wait(timeout=30)
+            if sdk<18:
+                replay_legacy_cases(serial,command,rows,report_name,directory,log,adb)
+            else:
+                process=subprocess.Popen(command,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,encoding='utf-8',errors='replace')
+                if os.environ.get('NTV_TEST_FOREGROUND')=='1':
+                    # MIUI can leave startActivitySync waiting behind its background
+                    # launch policy. A normal explicit shell launch presents the app.
+                    time.sleep(1)
+                    adb('shell','am','start','-n',PACKAGE+'/xiao.bu.tv.MainActivity')
+                for line in process.stdout:
+                    log.write(line);log.flush();print(serial,line.rstrip(),flush=True)
+                process.wait(timeout=30)
         trace.terminate();trace.wait(timeout=10);trace_file.close()
         trace=None;trace_file=None
-        adb('pull',f'/sdcard/Android/data/{PACKAGE}/files/{report_name}',directory/'results.json')
+        if sdk>=18:adb('pull',f'/sdcard/Android/data/{PACKAGE}/files/{report_name}',directory/'results.json')
         with contextlib.suppress(subprocess.CalledProcessError):
             adb('pull',f'/sdcard/Android/data/{PACKAGE}/files/codec-capabilities.json',directory)
         with contextlib.suppress(subprocess.CalledProcessError):

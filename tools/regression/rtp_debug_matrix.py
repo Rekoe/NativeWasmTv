@@ -83,7 +83,8 @@ def replay(serial,abi='arm32',decode_mode='software',cases=None,run_id=None,apk_
     sdk=int(adb('shell','getprop','ro.build.version.sdk').strip())
     if PACKAGE in adb('shell','pm','list','packages',PACKAGE):raise RuntimeError('Test app already exists')
     installed=[]
-    handler=functools.partial(http.server.SimpleHTTPRequestHandler,directory=str(matrix.OUT))
+    handler=functools.partial(matrix.legacy_capture_handler(serial,directory) if sdk<18
+                             else http.server.SimpleHTTPRequestHandler,directory=str(matrix.OUT))
     server=http.server.ThreadingHTTPServer(('0.0.0.0',PORT),handler)
     threading.Thread(target=server.serve_forever,daemon=True).start()
     try:
@@ -105,6 +106,7 @@ def replay(serial,abi='arm32',decode_mode='software',cases=None,run_id=None,apk_
         for index,(name,codec,mode) in enumerate([('avc-ts','h264','rtp'),('hevc-ts','hevc','rtp'),
                                                 ('avc-dynamic','h264','rtp'),('avc-dynamic','h264','sdp')]):
             if cases and index+1 not in cases:continue
+            if sdk<18:adb('shell','am','force-stop',PACKAGE)
             port=40120+index*2
             filename=directory/f'{index}-manifest.json'
             url=f'rtp://127.0.0.1:{port}'
@@ -125,26 +127,40 @@ def replay(serial,abi='arm32',decode_mode='software',cases=None,run_id=None,apk_
                  (directory/f'{index}-instrumentation.txt').open('w',encoding='utf-8') as log:
                 traceargs=[ADB,'-s',serial,'logcat','-v','threadtime']+(['-T','1'] if sdk>=21 else [])
                 trace=subprocess.Popen(traceargs+['-s','IJKMEDIA:I','MainActivity:I','HlsProxyServer:I'],stdout=tracefile,stderr=subprocess.STDOUT)
-                process=subprocess.Popen([ADB,'-s',serial,'shell','am','instrument','-w','-e','routeThroughResolver','true',
+                command=[ADB,'-s',serial,'shell','am','instrument','-w','-e','routeThroughResolver','true',
                     '-e','manifest','/data/local/tmp/ntv-media-matrix.json','-e','reportName',f'rtp-{index}.json',
-                    PACKAGE+'.test/'+matrix.RUNNER],stdout=log,stderr=subprocess.STDOUT)
+                    PACKAGE+'.test/'+matrix.RUNNER]
+                if sdk<18:command[-1:-1]=['-e','captureEndpoint',f'http://{matrix.lan_ip()}:{PORT}/__capture']
+                process=subprocess.Popen(command,stdout=log,stderr=subprocess.STDOUT)
                 if os.environ.get('NTV_TEST_FOREGROUND')=='1':
                     time.sleep(1);adb('shell','am','start','-n',PACKAGE+'/xiao.bu.tv.MainActivity')
                 time.sleep(4)
                 sender=subprocess.Popen([ADB,'-s',serial,'shell','/data/local/tmp/ntv-rtp-sender',
                                          '/data/local/tmp/ntv-rtp-packets',str(port)],stdout=subprocess.PIPE,stderr=subprocess.STDOUT)
-                process.wait(timeout=70)
+                timed_out=False
+                try:process.wait(timeout=90 if sdk<18 else 70)
+                except subprocess.TimeoutExpired:
+                    timed_out=True
+                    adb('shell','am','force-stop',PACKAGE)
+                    process.terminate();process.wait(timeout=10)
                 sender_result=sender.communicate(timeout=55)[0].decode('utf-8','replace')
                 if sender.returncode or 'sent=' not in sender_result:
                     raise RuntimeError('RTP fixture sender did not run: '+sender_result)
                 trace.terminate();trace.wait(timeout=10)
             report=directory/f'{index}-result.json'
-            adb('pull',f'/sdcard/Android/data/{PACKAGE}/files/rtp-{index}.json',report)
-            row=json.loads(report.read_text(encoding='utf-8'))[0];row['sender']=sender_result
+            try:
+                adb('pull',f'/sdcard/Android/data/{PACKAGE}/files/rtp-{index}.json',report)
+                row=json.loads(report.read_text(encoding='utf-8'))[0]
+            except Exception:
+                if not timed_out:raise
+                row=dict(index=index+1,name=item['name'])
+            if timed_out:row.update(status='failed',hostTimeout=True,error='RTP case exceeded bounded test deadline')
+            row['sender']=sender_result
             if row.get('captureVisible'):
                 adb('pull',f'/sdcard/Android/data/{PACKAGE}/files/playlist-{index+1:04d}.png',
                     directory/f'{index+1:04d}.png')
             results.append(row);print(serial,name,mode,row['status'],row.get('fpsLabel'),flush=True)
+            (directory/'results.json').write_text(json.dumps(results,indent=2),encoding='utf-8')
         (directory/'results.json').write_text(json.dumps(results,indent=2),encoding='utf-8')
     finally:
         for package in reversed(installed):

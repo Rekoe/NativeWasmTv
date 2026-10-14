@@ -162,7 +162,7 @@ public final class PlaylistPlaybackInstrumentation extends Instrumentation {
 
     private void saveCodecCapabilities(File directory) throws Exception {
         JSONArray codecs=new JSONArray();
-        for(int i=0;i<android.media.MediaCodecList.getCodecCount();i++) {
+        for(int i=0;android.os.Build.VERSION.SDK_INT>=16 && i<android.media.MediaCodecList.getCodecCount();i++) {
             android.media.MediaCodecInfo info=android.media.MediaCodecList.getCodecInfoAt(i);
             if(info.isEncoder())continue;
             JSONObject codec=new JSONObject().put("name",info.getName());
@@ -230,7 +230,16 @@ public final class PlaylistPlaybackInstrumentation extends Instrumentation {
         Bitmap image;
         try {
             if(!pixelCopy)SystemClock.sleep(200);
-            image=pixelCopy?SurfaceCapture.copy(view):getUiAutomation().takeScreenshot();
+            if(pixelCopy) image=SurfaceCapture.copy(view);
+            else if(android.os.Build.VERSION.SDK_INT>=18) image=getUiAutomation().takeScreenshot();
+            else {
+                String endpoint=args.getString("captureEndpoint");
+                if(endpoint==null)throw new AssertionError("API 14-17 requires the ADB screenshot bridge");
+                HttpURLConnection connection=(HttpURLConnection)new URL(endpoint+"?index="+index).openConnection();
+                connection.setConnectTimeout(10000);connection.setReadTimeout(30000);
+                try(InputStream input=connection.getInputStream()) {image=android.graphics.BitmapFactory.decodeStream(input);}
+                finally {connection.disconnect();}
+            }
         } finally {
             if(!pixelCopy)runOnMainSync(() -> {
                 for(android.view.View child:hidden)if(child.getVisibility()==android.view.View.INVISIBLE)
@@ -244,11 +253,54 @@ public final class PlaylistPlaybackInstrumentation extends Instrumentation {
         for(int y=image.getHeight()/20;y<image.getHeight()*19/20;y+=12)
             for(int x=image.getWidth()/20;x<image.getWidth()*19/20;x+=12)
                 if((image.getPixel(x,y)&0xffffff)!=0)visible++;
-        row.put("captureVisible",visible>5).put("captureMethod",pixelCopy?"PixelCopy Surface":"UiAutomation with UI hidden");
+        row.put("captureVisible",visible>5).put("captureMethod",pixelCopy?"PixelCopy Surface"
+                :android.os.Build.VERSION.SDK_INT>=18?"UiAutomation with UI hidden":"ADB screencap with UI hidden");
         File capture=new File(report.getParentFile(),String.format(java.util.Locale.US,"playlist-%04d.png",index));
         try(FileOutputStream output=new FileOutputStream(capture)){image.compress(Bitmap.CompressFormat.PNG,100,output);}
         image.recycle();
         if(visible<=5)throw new AssertionError("Video-only capture is black");
+    }
+    private static int processPssKb() {
+        android.os.Debug.MemoryInfo memory=new android.os.Debug.MemoryInfo();
+        android.os.Debug.getMemoryInfo(memory);
+        return memory.getTotalPss();
+    }
+    private void checkSystemPlayer(JSONObject row,JSONObject item,File report,int index)throws Exception {
+        tv.danmaku.ijk.media.player.IMediaPlayer player=(tv.danmaku.ijk.media.player.IMediaPlayer)field("player").get(activity);
+        long began=SystemClock.elapsedRealtime(),lastPosition=player.getCurrentPosition(),advanced=0;
+        while(SystemClock.elapsedRealtime()-began<item.optLong("sampleMs",5500)) {
+            if(field("player").get(activity)!=player || !player.isPlaying())throw new AssertionError("System playback stopped or replaced");
+            if(!activity.hasWindowFocus())throw new AssertionError("Lost foreground");
+            long position=player.getCurrentPosition();advanced+=Math.max(0,position-lastPosition);lastPosition=position;
+            SystemClock.sleep(100);
+        }
+        if(advanced<1000)throw new AssertionError("System playback clock did not advance");
+        captureVideo(row,report,index);row.put("playbackStatus","played");
+        if(item.optBoolean("availabilityOnly")) {
+            row.put("positionAdvancedMs",advanced).put("status","played")
+                    .put("metadataStatus","notChecked").put("resolvedUrl",field("activePlayerStreamUrl").get(activity))
+                    .put("width",field("videoWidth").getInt(activity)).put("height",field("videoHeight").getInt(activity))
+                    .put("decoderType",player instanceof tv.danmaku.ijk.media.player.AndroidMediaPlayer ? "system" : "ijk");
+            return;
+        }
+        Method collect=MainActivity.class.getDeclaredMethod("collectPlaybackStreamStats",float.class);collect.setAccessible(true);
+        Object stats=collect.invoke(activity,0f);
+        Method format=MainActivity.class.getDeclaredMethod("formatDebugFrameRate",stats.getClass());format.setAccessible(true);
+        VideoStreamDescription description=(VideoStreamDescription)stat(stats,"videoDescription");
+        float source=((Number)stat(stats,"nominalFrameRate")).floatValue();
+        int width=((Number)stat(stats,"width")).intValue(),height=((Number)stat(stats,"height")).intValue();
+        row.put("decoderType","system").put("decoder","Android MediaPlayer (implementation unavailable)")
+                .put("width",width).put("height",height).put("positionAdvancedMs",advanced)
+                .put("sourceFps",source).put("outputFps",JSONObject.NULL).put("fpsLabel",format.invoke(null,stats))
+                .put("scanType",description.scanType).put("bitDepth",description.bitDepth).put("transfer",description.colorTransfer)
+                .put("videoCodec",stat(stats,"videoCodec")).put("audioCodec",stat(stats,"audioCodec"))
+                .put("processPssKb",processPssKb()).put("outputMetricsAvailable",false);
+        if(item.has("width") && (width!=item.getInt("width") || height!=item.getInt("height")))throw new AssertionError("System source dimensions differ");
+        if(item.has("expectedVideoCodec") && !item.getString("expectedVideoCodec").equals(stat(stats,"videoCodec")))throw new AssertionError("System source video codec differs");
+        if(item.has("expectedAudioCodec") && !item.getString("expectedAudioCodec").equals(stat(stats,"audioCodec")))throw new AssertionError("System source audio codec differs");
+        if(item.has("expectedSourceFps") && Math.abs(source-item.getDouble("expectedSourceFps"))>.5)throw new AssertionError("System source frame cadence differs");
+        if(item.has("expectedScanType") && !item.getString("expectedScanType").equals(description.scanType))throw new AssertionError("System source scan type differs");
+        row.put("metadataStatus","passed").put("status","played");
     }
     @android.annotation.TargetApi(26)
     private static final class SurfaceCapture {
@@ -419,7 +471,7 @@ public final class PlaylistPlaybackInstrumentation extends Instrumentation {
                         long latency=SystemClock.elapsedRealtime()-selectionStarted;row.put("uiSwitchMs",latency);
                         if(latency>500)throw new AssertionError("UI selection blocked behind decrypt lock: "+latency+"ms");
                     }
-                    deadline=SystemClock.elapsedRealtime()+20000;
+                    deadline=SystemClock.elapsedRealtime()+(android.os.Build.VERSION.SDK_INT<=15?50000:20000);
                     while(!field("videoRenderingStarted").getBoolean(activity)
                             || field("preparingChannelSwitch").getBoolean(activity)
                             || (resolve ? field("activePlayerChannel").get(activity)!=channel
@@ -437,14 +489,24 @@ public final class PlaylistPlaybackInstrumentation extends Instrumentation {
                                     .put("rejectionMs",SystemClock.elapsedRealtime()-start);
                             throw new CapabilityLimit();
                         }
+                        if(field("player").get(activity)==null && playbackMessage[0].startsWith("系统播放器出错"))
+                            throw new AssertionError(playbackMessage[0]);
                         if(!activity.hasWindowFocus())throw new AssertionError("Lost foreground before first frame");
                         if(SystemClock.elapsedRealtime()>deadline)throw new AssertionError("First frame timeout");
                         SystemClock.sleep(100);
                     }
                     row.put("firstFrameMs",SystemClock.elapsedRealtime()-start);
+                    savePending(report,row);
                     if(resolve ? field("activePlayerChannel").get(activity)!=channel
                             : !url.equals(field("activePlayerStreamUrl").get(activity)))
                         throw new AssertionError("Startup request replaced the fixture URL");
+                    if(item.optBoolean("availabilityOnly") || field("player").get(activity) instanceof tv.danmaku.ijk.media.player.AndroidMediaPlayer) {
+                        checkSystemPlayer(row,item,report,index);
+                        row.put("elapsedMs",SystemClock.elapsedRealtime()-start);results.put(row);save(report);
+                        Bundle progress=new Bundle();progress.putString("stream",index+" "+item.getString("name")+" played ("
+                                +(item.optBoolean("availabilityOnly") ? "availability" : "system")+")\n");sendStatus(0,progress);
+                        continue;
+                    }
                     IjkMediaPlayer player=(IjkMediaPlayer)field("player").get(activity);
                     long beginPosition=player.getCurrentPosition();
                     deadline=SystemClock.elapsedRealtime()+Math.max(10000,item.optLong("sampleMs",2000)+5000);
@@ -485,6 +547,7 @@ public final class PlaylistPlaybackInstrumentation extends Instrumentation {
                             .put("width",player.getVideoWidth()).put("height",player.getVideoHeight())
                             .put("decoder",IjkStreamMetrics.videoDecoderName(player))
                             .put("decoderType",player.getVideoDecoder()==IjkMediaPlayer.FFP_PROPV_DECODER_MEDIACODEC?"hardware":"software");
+                    savePending(report,row);
                     // Verify actual video before metadata assertions, so missing
                     // header fields are not reported as a failure to play the video.
                     captureVideo(row,report,index);
@@ -575,7 +638,7 @@ public final class PlaylistPlaybackInstrumentation extends Instrumentation {
                         throw new AssertionError("Source audio has no decoder");
                     row.put("decoder",IjkStreamMetrics.videoDecoderName(player))
                             .put("cpuPercent",field("cachedCpuUsage").getFloat(activity))
-                            .put("processPssKb",android.os.Debug.getPss())
+                            .put("processPssKb",processPssKb())
                             .put("nativeHeapKb",android.os.Debug.getNativeHeapAllocatedSize()/1024)
                             .put("resolvedUrl",String.valueOf(field("activePlayerStreamUrl").get(activity)))
                             .put("decoderType",player.getVideoDecoder()==IjkMediaPlayer.FFP_PROPV_DECODER_MEDIACODEC ? "hardware" : "software")
@@ -614,10 +677,14 @@ public final class PlaylistPlaybackInstrumentation extends Instrumentation {
                     else row.put("playbackStatus",foregroundInterrupted?"interrupted":"failed");
                     failures++;row.put("status",foregroundInterrupted?"interrupted":"failed")
                             .put("error",android.util.Log.getStackTraceString(error));
+                    // Persist the actual assertion before collecting diagnostics.
+                    // Old Dalvik can block while suspending a native/EGL thread.
+                    JSONArray checkpoint=new JSONArray(results.toString());checkpoint.put(row);
+                    try(FileOutputStream output=new FileOutputStream(report)) {output.write(checkpoint.toString(2).getBytes("UTF-8"));}
                     // A timeout before prepare needs Java/proxy state too; native
                     // logs alone cannot distinguish socket waits from cache waits.
                     File dump=new File(report.getParentFile(),String.format(java.util.Locale.US,"failure-%04d-threads.txt",index));
-                    try(java.io.FileOutputStream output=new java.io.FileOutputStream(dump)) {
+                    if(android.os.Build.VERSION.SDK_INT>=18)try(java.io.FileOutputStream output=new java.io.FileOutputStream(dump)) {
                         for(java.util.Map.Entry<Thread,StackTraceElement[]> entry:Thread.getAllStackTraces().entrySet()) {
                             StringBuilder text=new StringBuilder(entry.getKey().getName()).append(" ").append(entry.getKey().getState()).append('\n');
                             for(StackTraceElement frame:entry.getValue())text.append("  ").append(frame).append('\n');
