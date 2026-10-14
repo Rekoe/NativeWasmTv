@@ -16,7 +16,7 @@ import java.util.zip.*;
 
 /** Immutable JAR paths permit replacing a View while its old DEX is still loaded. */
 final class RadioUiPlugin {
-    static final String DEFAULT_URL = "https://raw.githubusercontent.com/buhanzhe/NativeWasmTv/master/plugins/radio-ui/dist/radio-ui-v4.jar";
+    static final String DEFAULT_URL = "https://raw.githubusercontent.com/buhanzhe/NativeWasmTv/master/plugins/radio-ui2/dist/radio-ui2.jar";
     static final int MAX_BYTES = 2 * 1024 * 1024;
     private static final ExecutorService worker = Executors.newSingleThreadExecutor();
     private static final List<WeakReference<AudioArtworkView>> views = new ArrayList<WeakReference<AudioArtworkView>>();

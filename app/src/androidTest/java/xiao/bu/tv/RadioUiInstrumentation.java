@@ -90,7 +90,7 @@ public final class RadioUiInstrumentation extends Instrumentation {
             if(!active.equals(new JSONObject(RadioUiPlugin.status(getTargetContext())).getString("sha256")) || delegate()!=next)
                 throw new AssertionError("Failed install replaced working UI");
             RadioUiPlugin.configure(getTargetContext(),new JSONObject().put("style","classic"));
-            RadioUiPlugin.install(getTargetContext(),read(new File(dir,"radio-ui-v3.jar")));waitVersion(3);waitStyle(false);
+            RadioUiPlugin.install(getTargetContext(),read(new File(dir,"radio-ui2.jar")));waitVersion(4);waitStyle(false);
             before=audio.getCurrentPosition();
             RadioUiPlugin.configure(getTargetContext(),new JSONObject().put("style","optical"));waitStyle(true);
             if(view.cover()!=cover)throw new AssertionError("Style switch lost cover");
@@ -116,7 +116,7 @@ public final class RadioUiInstrumentation extends Instrumentation {
             if(content.get(cold)==null)throw new AssertionError("Cold cached JAR did not load");
             Field styleField=content.get(cold).getClass().getDeclaredField("optical");styleField.setAccessible(true);
             if(!styleField.getBoolean(content.get(cold)))throw new AssertionError("Cold reload lost selected style");
-            result.putString("stream","PASS: DEX v1->v2->v3, classic/optical switching, gesture-deferred replacement, cover/audio preservation, invalid-JAR/style rollback, persisted style and offline cold reload\n");code=-1;
+            result.putString("stream","PASS: classic DEX v1->v2->radio-ui2, classic/optical switching, gesture-deferred replacement, cover/audio preservation, invalid-JAR/style rollback, persisted style and offline cold reload\n");code=-1;
         }catch(Throwable e){result.putString("stream",android.util.Log.getStackTraceString(e));}
         finally {
             if(audio!=null)audio.release();

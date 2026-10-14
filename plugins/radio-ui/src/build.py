@@ -1,7 +1,7 @@
 """Build an API14 DEX JAR; Android resources are ordinary JAR entries."""
 import argparse,json,pathlib,subprocess,zipfile,hashlib,os
 root=pathlib.Path(__file__).resolve().parents[3]
-parser=argparse.ArgumentParser();parser.add_argument('--version',type=int,default=4)
+parser=argparse.ArgumentParser();parser.add_argument('--version',type=int,default=1)
 parser.add_argument('--sdk',default=os.environ.get('ANDROID_SDK_ROOT','D:/android/sdk'))
 parser.add_argument('--java-home',default=os.environ.get('JAVA_HOME','C:/Users/Administrator/.jdks/corretto-1.8.0_492'))
 args=parser.parse_args()
@@ -22,8 +22,7 @@ target=root/'plugins/radio-ui/dist';target.mkdir(exist_ok=True)
 jar=target/('radio-ui-v'+str(args.version)+'.jar')
 with zipfile.ZipFile(jar,'w',compression=zipfile.ZIP_DEFLATED) as archive:
     archive.write(dex/'classes.dex','classes.dex')
-    archive.writestr('radio-ui.json',json.dumps(dict(api=1,version=args.version,minSdk=14,
-            entry='xiao.bu.radio.RadioArtwork',styles=['classic','optical'])))
+    archive.writestr('radio-ui.json',json.dumps(dict(api=1,version=args.version,minSdk=14,entry='xiao.bu.radio.RadioArtwork')))
     for p in (root/'plugins/radio-ui/assets').rglob('*'):
         if p.is_file():archive.write(p,p.relative_to(root/'plugins/radio-ui/assets').as_posix())
 sha=hashlib.sha256(jar.read_bytes()).hexdigest()
