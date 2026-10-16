@@ -93,4 +93,5 @@ tools/
 !/app/src/androidTest/java/xiao/bu/tv/UsbLoopbackBridge.java
 
 !/tests/hls-resolved-handoff.test.py
+!/tests/legacy-metadata-probe.test.py
 !/app/src/androidTest/java/xiao/bu/tv/PlaylistSourceBatchInstrumentation.java
