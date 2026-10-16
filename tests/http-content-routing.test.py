@@ -45,6 +45,14 @@ public class HttpContentRoutingCheck {
   }
   HttpStreamResolver.Result r=test("no-suffix","text/html",text("#EXTM3U\n#EXTINF:5,\npart.ts\n"),1);
   check(!r.webPage&&!r.directMedia,"HLS body must beat HTML MIME");
+
+  byte[] manifest=text("#EXTM3U\n#EXTINF:2,\nopaque.php?token=1\n#EXT-X-ENDLIST\n");
+  r=test("huya.php?id=room","application/vnd.apple.mpegurl",manifest,1);
+  check(r.url.endsWith("huya.php?id=room")&&Arrays.equals(r.playlist,text(new String(manifest,"UTF-8").trim())),"Complete API manifest handed off under exact URL");
+  check(!r.webPage&&!r.directMedia&&r.playlistReceivedNanos>0,"HLS snapshot kept classification and timestamp");
+  byte[] oversized=new byte[140000];Arrays.fill(oversized,(byte)' ');System.arraycopy(manifest,0,oversized,0,manifest.length);
+  r=test("large.php","application/vnd.apple.mpegurl",oversized,1024);
+  check(r.playlist==null&&NetworkClient.bytesRead<=128*1024+1,"Oversized manifest handoff bounded without truncation");
   r=test("video.sdp","application/sdp",text("v=0\r\no=- 0 0 IN IP4 127.0.0.1\r\ns=RTP fixture\r\nm=video 40120 RTP/AVP 96\r\na=rtpmap:96 H264/90000\r\n"),2);
   check(r.directMedia&&!r.webPage,"SDP must reach the native RTP demuxer");
   r=test("fake.sdp","application/sdp",page,2);check(r.webPage&&!r.directMedia,"HTML still beats SDP MIME");

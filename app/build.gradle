@@ -190,8 +190,7 @@ task packageWebkitCorePair(type: Jar) {
 
 dependencies {
     implementation 'tv.danmaku.ijk.media:ijkplayer-java:0.8.8'
-    // ARM builds use the locally patched IJK libraries; x86 uses upstream 0.8.8.
-    x86Implementation 'tv.danmaku.ijk.media:ijkplayer-x86:0.8.8'
+    // All ABIs use the patched local libraries, including Dolby audio and metrics.
     implementation('androidx.webkit:webkit:1.9.0') {
         exclude group: 'androidx.core', module: 'core'
     }
@@ -234,15 +233,18 @@ task generateVersionFile {
             throw new GradleException('-PupdateApk32, -PupdateApk64 and -PupdateApkX86 are required')
         }
         String releaseBase = 'https://github.com/buhanzhe/NativeWasmTv/releases/latest/download/'
+        String apk32Asset = java.net.URLEncoder.encode('网页电视32位.apk', 'UTF-8')
+        String apk64Asset = java.net.URLEncoder.encode('网页电视64位.apk', 'UTF-8')
+        String apkX86Asset = java.net.URLEncoder.encode('网页电视x86.apk', 'UTF-8')
 
         def manifest = [
                 versionCode : android.defaultConfig.versionCode,
                 versionName : android.defaultConfig.versionName,
                 // apkUrl/sha256 keep every released 32-bit updater backward compatible.
-                apkUrl      : releaseBase + 'nTv.apk',
-                apk32Url    : releaseBase + 'nTv.apk',
-                apk64Url    : releaseBase + 'nTv64.apk',
-                apkX86Url   : releaseBase + 'nTvX86.apk',
+                apkUrl      : releaseBase + apk32Asset,
+                apk32Url    : releaseBase + apk32Asset,
+                apk64Url    : releaseBase + apk64Asset,
+                apkX86Url   : releaseBase + apkX86Asset,
                 sha256      : sha25632,
                 sha25632    : sha25632,
                 sha25664    : sha25664,
