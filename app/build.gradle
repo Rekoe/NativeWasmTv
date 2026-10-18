@@ -233,9 +233,10 @@ task generateVersionFile {
             throw new GradleException('-PupdateApk32, -PupdateApk64 and -PupdateApkX86 are required')
         }
         String releaseBase = 'https://github.com/buhanzhe/NativeWasmTv/releases/latest/download/'
-        String apk32Asset = java.net.URLEncoder.encode('网页电视32位.apk', 'UTF-8')
-        String apk64Asset = java.net.URLEncoder.encode('网页电视64位.apk', 'UTF-8')
-        String apkX86Asset = java.net.URLEncoder.encode('网页电视x86.apk', 'UTF-8')
+        // Keep the release asset names compatible with already shipped updaters.
+        String apk32Asset = 'nTv.apk'
+        String apk64Asset = 'nTv64.apk'
+        String apkX86Asset = 'nTvX86.apk'
 
         def manifest = [
                 versionCode : android.defaultConfig.versionCode,

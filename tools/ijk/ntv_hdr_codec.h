@@ -31,6 +31,7 @@ static void ntv_hdr_codec_format(SDL_AMediaFormat *format, AVCodecParameters *pa
     int primaries = ctx && ctx->color_primaries != AVCOL_PRI_UNSPECIFIED ? ctx->color_primaries : par->color_primaries;
     int range = ctx && ctx->color_range ? ctx->color_range : par->color_range;
     int source_profile = par->profile;
+    int depth = ctx && ctx->bits_per_raw_sample ? ctx->bits_per_raw_sample : par->bits_per_raw_sample;
     NtvHevcColor color;
     if (par->codec_id == AV_CODEC_ID_HEVC)
         ALOGI("nTv HEVC input transfer: stream=%d context=%d",par->color_trc,ctx ? ctx->color_trc : -1);
@@ -42,7 +43,7 @@ static void ntv_hdr_codec_format(SDL_AMediaFormat *format, AVCodecParameters *pa
         trc = ntv_hevc_stream_transfer(trc, &color);
         if (color.primaries != 2) primaries = color.primaries;
         if (color.range) range = color.range;
-        if (color.depth) source_profile = color.profile;
+        if (color.depth) { source_profile = color.profile; depth = color.depth; }
     }
     /* Opening FFmpeg's codec may re-export the SPS VUI into codecpar, so retain
      * the independently validated first-access-unit SEI across that step. */
@@ -58,6 +59,8 @@ static void ntv_hdr_codec_format(SDL_AMediaFormat *format, AVCodecParameters *pa
             : trc == AVCOL_TRC_LINEAR ? 1
             : trc == AVCOL_TRC_BT709 || trc == AVCOL_TRC_SMPTE170M
                 || trc == AVCOL_TRC_BT2020_10 || trc == AVCOL_TRC_BT2020_12 ? 3 : 0;
+    if (!depth) depth = par->codec_id == AV_CODEC_ID_HEVC && source_profile == FF_PROFILE_HEVC_MAIN_10 ? 10 : 8;
+    SDL_AMediaFormat_setInt32(format,"ntv-source-depth",depth);
     SDL_AMediaFormat_setInt32(format,"ntv-hdr-mode",mode);
     SDL_AMediaFormat_setInt32(format,"ntv-source-standard",standard);
     SDL_AMediaFormat_setInt32(format,"ntv-source-transfer",transfer);

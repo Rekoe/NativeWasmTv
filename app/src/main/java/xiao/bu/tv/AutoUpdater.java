@@ -41,6 +41,14 @@ final class AutoUpdater {
 
     private final Activity activity;
     private volatile boolean destroyed;
+    private volatile Runnable liteListener;
+    void setLiteListener(Runnable listener){liteListener=listener;}
+    private void notifyLite(){notifyLite(null);}
+    private void notifyLite(String message){activity.runOnUiThread(()->{
+        if(destroyed||activity.isFinishing())return;
+        Runnable value=liteListener;if(value!=null)value.run();
+        if(message!=null)Toast.makeText(activity,message,Toast.LENGTH_LONG).show();
+    });}
     private volatile boolean importantChecking;
     private volatile boolean liteChecking;
     private volatile String liteState = "idle";
@@ -89,14 +97,16 @@ final class AutoUpdater {
         }, "update-check").start();
     }
 
-    synchronized String checkLiteForUpdates() {
+    synchronized String checkLiteForUpdates() {return checkLiteForUpdates(false);}
+
+    synchronized String checkLiteForUpdates(final boolean showResult) {
         if (destroyed) return stateResponse(false, "更新服务已关闭");
         if (downloadActive || "downloading".equals(liteState)) return stateResponse(true, "正在下载更新");
         if (liteChecking) return stateResponse(true, "正在检查更新");
         liteUpdate = null;
         liteChecking = true;
         liteState = "checking";
-        liteMessage = "正在读取最新 Release…";
+        liteMessage = "正在检查更新…";
         liteVersionCode = 0;
         liteVersionName = "";
         liteArchitectureUpgrade = false;
@@ -125,10 +135,11 @@ final class AutoUpdater {
                     Log.w(TAG, "Lightweight update check failed", error);
                 } finally {
                     liteChecking = false;
+                    notifyLite(showResult ? liteMessage : null);
                 }
             }
         }, "update-lite-check").start();
-        return stateResponse(true, "正在检查更新");
+        notifyLite();return stateResponse(true, "正在检查更新");
     }
 
     synchronized String installLiteUpdate() {
@@ -177,7 +188,7 @@ final class AutoUpdater {
     }
 
     void destroy() {
-        destroyed = true;
+        destroyed = true;liteListener=null;
         if (promptDialog != null) {
             promptDialog.dismiss();
             promptDialog = null;
@@ -190,26 +201,13 @@ final class AutoUpdater {
 
     private UpdateInfo loadUpdateInfo(String manifestUrl, boolean allowArchitectureUpgrade)
             throws IOException, JSONException {
-        String json = readManifest(manifestUrl,
-                allowArchitectureUpgrade ? IMPORTANT_VERSION_URL : null);
+        String json = readManifest(manifestUrl);
 
         JSONObject object = new JSONObject(json);
         return parseUpdateInfo(object, allowArchitectureUpgrade);
     }
 
-    // Old releases predate version-lite.json. Only a missing file permits this
-    // compatibility fallback; network/server/JSON errors must not report stale data.
-    String readManifest(String manifestUrl, String legacyUrl) throws IOException {
-        try {
-            return downloadManifest(manifestUrl);
-        } catch (HttpStatusException error) {
-            if (error.status != 404 || legacyUrl == null) throw error;
-            Log.i(TAG, "Release has no lightweight manifest; reading legacy metadata");
-            return downloadManifest(legacyUrl);
-        }
-    }
-
-    private String downloadManifest(String manifestUrl) throws IOException {
+    String readManifest(String manifestUrl) throws IOException {
         // Keep the canonical URL here. NetworkClient owns accelerator selection
         // and failover; query parameters must never be appended to an empty route.
         HttpURLConnection connection = openConnection(
@@ -273,15 +271,31 @@ final class AutoUpdater {
         if (apkUrl.length() == 0) {
             throw new JSONException("Missing APK URL for " + apkAsset);
         }
-        if (!apkUrl.endsWith("/" + apkAsset)) {
-            throw new JSONException("Wrong APK URL for " + apkAsset);
-        }
         apkUrl = validatedGithubUrl(apkUrl);
+        String displayAsset = architectureUpgrade || "arm64".equals(BuildConfig.FLAVOR)
+                ? "网页电视64位.apk" : "x86".equals(BuildConfig.FLAVOR)
+                ? "网页电视x86.apk" : "网页电视32位.apk";
+        apkAsset = validatedApkFilename(apkUrl, apkAsset, displayAsset);
         if (sha256.length() > 0 && !sha256.matches("[0-9a-f]{64}")) {
             throw new JSONException("Invalid APK SHA-256");
         }
         return new UpdateInfo(versionCode, versionName, apkUrl, sha256, releaseNotes,
                 apkAsset, architectureUpgrade);
+    }
+
+    static String validatedApkFilename(String apkUrl, String expected, String displayAsset)
+            throws JSONException {
+        try {
+            String path = new URL(apkUrl).getPath();
+            String file = java.net.URLDecoder.decode(path.substring(path.lastIndexOf('/') + 1), "UTF-8");
+            if (!file.equalsIgnoreCase(expected) && !file.equals(displayAsset)) {
+                throw new JSONException("Wrong APK URL for " + expected);
+            }
+            // Preserve the manifest's case: GitHub asset paths are case-sensitive.
+            return file;
+        } catch (IOException | IllegalArgumentException error) {
+            throw new JSONException("Invalid APK filename");
+        }
     }
 
     private static boolean isArm32Build() {

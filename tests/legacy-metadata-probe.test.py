@@ -12,7 +12,7 @@ stubs = {
     'xiao/bu/tv/VideoStreamDescription.java': '''package xiao.bu.tv;
 class VideoStreamDescription {
  static final VideoStreamDescription UNKNOWN=new VideoStreamDescription();
- boolean complete(){return false;} String debugLabel(){return "test";}
+ String scanType="unknown";boolean complete(){return false;} String debugLabel(){return "test";}
  VideoStreamDescription withFallback(VideoStreamDescription d){return this;}
 }''',
     'xiao/bu/tv/IjkStreamMetrics.java': '''package xiao.bu.tv;

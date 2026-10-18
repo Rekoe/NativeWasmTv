@@ -74,31 +74,31 @@ module.exports = function applyHdr(root) {
     SDL_JNI_DeleteLocalRefP(env, &local_android_format);`);
     edit(amc,'        SDL_JNI_DeleteGlobalRefP(env, &opaque->output_buffer_info);',
         '        ntv_hdr_close(env,&opaque->ntv_hdr_bridge);\n        SDL_JNI_DeleteGlobalRefP(env, &opaque->output_buffer_info);');
-    edit(amc,'    J4AC_MediaCodec__configure(env, android_media_codec, android_media_format, android_surface, crypto, flags);',
-        `    jobject ntv_surface = NULL;
-    ntv_hdr_close(env,&opaque->ntv_hdr_bridge);
-    if (ntv_hdr_class) {
-        jobject bridge = (*env)->CallStaticObjectMethod(env,ntv_hdr_class,ntv_hdr_create,android_media_format,android_surface);
+    // Migrate the old create/configure/verify split as one unit. Java owns the bounded
+    // codec-SDR -> GPU retry, and returns the final bridge to the native codec owner.
+    const configureTarget=path.join(root,amc);
+    const configured=fs.readFileSync(configureTarget,'utf8').replace(/\r\n/g,'\n');
+    const configureBody=`    ntv_hdr_close(env,&opaque->ntv_hdr_bridge);
+    if (ntv_hdr_class && ntv_hdr_configure) {
+        jobject bridge = (*env)->CallStaticObjectMethod(env,ntv_hdr_class,ntv_hdr_configure,
+                android_media_codec,android_media_format,android_surface,crypto,(jint)flags);
         if (J4A_ExceptionCheck__catchAll(env)) return SDL_AMEDIA_ERROR_UNKNOWN;
         if (bridge) {
             opaque->ntv_hdr_bridge = (*env)->NewGlobalRef(env,bridge);
-            ntv_surface = (*env)->CallObjectMethod(env,bridge,ntv_hdr_surface);
             (*env)->DeleteLocalRef(env,bridge);
-            if (J4A_ExceptionCheck__catchAll(env) || !ntv_surface) {
-                ntv_hdr_close(env,&opaque->ntv_hdr_bridge);
-                return SDL_AMEDIA_ERROR_UNKNOWN;
-            }
         }
-    }
-    J4AC_MediaCodec__configure(env, android_media_codec, android_media_format, ntv_surface ? ntv_surface : android_surface, crypto, flags);
-    if (ntv_surface) (*env)->DeleteLocalRef(env,ntv_surface);`);
-    edit(amc,'    opaque->is_input_buffer_valid = true;\n    return SDL_AMEDIA_OK;',
-        `    if (ntv_hdr_class) {
-        (*env)->CallStaticVoidMethod(env,ntv_hdr_class,ntv_hdr_verify,android_media_codec,android_media_format);
+    } else {
+        J4AC_MediaCodec__configure(env,android_media_codec,android_media_format,android_surface,crypto,flags);
         if (J4A_ExceptionCheck__catchAll(env)) return SDL_AMEDIA_ERROR_UNKNOWN;
     }
-    opaque->is_input_buffer_valid = true;
-    return SDL_AMEDIA_OK;`);
+`;
+    if(!configured.includes(configureBody)){
+        let begin=configured.indexOf('    jobject ntv_surface = NULL;');
+        if(begin<0)begin=configured.indexOf('    J4AC_MediaCodec__configure(env, android_media_codec, android_media_format, android_surface, crypto, flags);');
+        const end=configured.indexOf('    opaque->is_input_buffer_valid = true;',begin);
+        if(begin<0||end<begin)throw new Error('Unexpected HDR codec configure block');
+        fs.writeFileSync(configureTarget,configured.slice(0,begin)+configureBody+configured.slice(end));
+    }
     const overlay = 'ijkmedia/ijksdl/ijksdl_vout.h';
     edit(overlay,'    int is_private;', '    int ntv_colorspace, ntv_transfer, ntv_full_range;\n    float ntv_peak;\n    int is_private;');
     const fill = 'ijkmedia/ijksdl/ffmpeg/ijksdl_vout_overlay_ffmpeg.c';

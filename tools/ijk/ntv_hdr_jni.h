@@ -2,8 +2,8 @@
 #ifndef NTV_HDR_JNI_H
 #define NTV_HDR_JNI_H
 static jclass ntv_hdr_class;
-static jmethodID ntv_hdr_create, ntv_hdr_surface, ntv_hdr_release, ntv_hdr_output, ntv_hdr_verify;
-static jmethodID ntv_hdr_prepare;
+static jmethodID ntv_hdr_release, ntv_hdr_output;
+static jmethodID ntv_hdr_prepare, ntv_hdr_configure;
 void ntv_hdr_jni_init(JNIEnv *env)
 {
     if (J4A_GetSystemAndroidApiLevel(env) < 17) return;
@@ -11,13 +11,10 @@ void ntv_hdr_jni_init(JNIEnv *env)
     if (J4A_ExceptionCheck__catchAll(env) || !local) return;
     ntv_hdr_class = (*env)->NewGlobalRef(env,local);
     (*env)->DeleteLocalRef(env,local);
-    ntv_hdr_create = (*env)->GetStaticMethodID(env,ntv_hdr_class,"create",
-            "(Landroid/media/MediaFormat;Landroid/view/Surface;)Lxiao/bu/tv/NativeHdrOutput;");
-    ntv_hdr_surface = (*env)->GetMethodID(env,ntv_hdr_class,"getSurface","()Landroid/view/Surface;");
+    ntv_hdr_configure = (*env)->GetStaticMethodID(env,ntv_hdr_class,"configure",
+            "(Landroid/media/MediaCodec;Landroid/media/MediaFormat;Landroid/view/Surface;Landroid/media/MediaCrypto;I)Lxiao/bu/tv/NativeHdrOutput;");
     ntv_hdr_release = (*env)->GetMethodID(env,ntv_hdr_class,"release","()V");
     ntv_hdr_output = (*env)->GetMethodID(env,ntv_hdr_class,"outputFormat","(Landroid/media/MediaFormat;)V");
-    ntv_hdr_verify = (*env)->GetStaticMethodID(env,ntv_hdr_class,"verifyToneMapping",
-            "(Landroid/media/MediaCodec;Landroid/media/MediaFormat;)V");
     ntv_hdr_prepare = (*env)->GetStaticMethodID(env,ntv_hdr_class,"prepareSoftwareOutput","()V");
     if (J4A_ExceptionCheck__catchAll(env)) {
         (*env)->DeleteGlobalRef(env,ntv_hdr_class); ntv_hdr_class = NULL;

@@ -42,7 +42,8 @@ final class CachedVideoMetadataProbe {
         // metadata can SIGILL on old TV CPUs (Bugly 1139), outside Java catches.
         if (android.os.Build.VERSION.SDK_INT <= 15) return;
         if (closed || directory == null || bytes == null || bytes.length < 188 * 16 || attempts >= 3
-                || description.complete() || task != null && !task.isDone()
+                || description.complete() && !"unknown".equals(description.scanType)
+                || task != null && !task.isDone()
                 || attempts > 0 && SystemClock.elapsedRealtime() - lastAttempt < 1500) return;
         byte[] sample = Arrays.copyOf(bytes, Math.min(bytes.length, MAX_BYTES));
         FutureTask<Void> next = new FutureTask<>(() -> { inspect(sample); return null; });
