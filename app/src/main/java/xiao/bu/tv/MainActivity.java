@@ -1391,6 +1391,9 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         requestLocalPlaylistPermissionIfNeeded();
         epgManager = new EpgManager(this);
         applyEpgEnabled();
+        if(epgEnabled)epgManager.restoreCached(effectiveEpgUrls(),()->runOnUiThread(()->{
+            if(!isFinishing()&&!startupMaintenanceDestroyed)refreshEpgViews();
+        }));
         yangshipinResolver = new YangshipinWebResolver(this, (FrameLayout) root,
                 getIntent().getBooleanExtra("cmg_keep_web_trace", false));
         ku9ScriptResolver = new Ku9ScriptResolver(this, (FrameLayout) root);
@@ -11946,6 +11949,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
     }
 
     private void refreshEpgViews() {
+        applyEpgEnabled();
         int position = channelList == null
                 ? currentChannelIndex : channelPager.position(browsingChannelPosition());
         if (position == AdapterView.INVALID_POSITION) {
