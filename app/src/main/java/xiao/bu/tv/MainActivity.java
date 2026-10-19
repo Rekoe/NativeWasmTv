@@ -428,6 +428,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
     private CjsSource activeCjsSource;
     private Ku9ScriptResolver ku9ScriptResolver;
     private JarChannelRuntime jarChannelRuntime;
+    private long lastJarBackPressedAt;
     private CjsSiteResolver cjsSiteResolver;
     private DirectVideoView videoView;
 
@@ -2195,6 +2196,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
 
     private void confirmBackPrompt() {
         if (webClosePrompt) {
+            lastJarBackPressedAt = 0L;
             clearWebCloseConfirmation();
             root.requestFocus();
             return;
@@ -7113,6 +7115,10 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                     && webSourceView.cancelRemoteMouseButton(event)) {
                 return;
             }
+            if (jarPageOwnsInput()) {
+                jarChannelRuntime.dispatchPointer(event, true);
+                return;
+            }
             // ViewGroup applies each child's inverse matrix, including the desktop
             // WebView's scale. Keep native hit-testing instead of injecting DOM JS.
             if (action == MotionEvent.ACTION_DOWN || action == MotionEvent.ACTION_MOVE
@@ -7519,6 +7525,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
             return;
         }
         if (JarChannelSource.matches(configuredUrl)) {
+            lastJarBackPressedAt = 0L;
             if (ku9ScriptResolver != null) ku9ScriptResolver.cancel();
             if (cjsSiteResolver != null) cjsSiteResolver.cancel();
             updateLoadingStatus("正在加载 JAR 频道");
@@ -14646,6 +14653,11 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         if (remoteCatalogUrl.length() > 0) {
             return true;
         }
+        if (jarPageOwnsInput()) {
+            playbackGestureTracking = false;
+            playbackGestureEdgeBlocked = false;
+            return jarChannelRuntime.dispatchPointer(event, false);
+        }
         if (action == MotionEvent.ACTION_DOWN && webSourceView != null
                 && webSourceView.isBrowserChromeTouch(event)) {
             // Browser tabs, address controls and the bookmark strip own the whole
@@ -14688,6 +14700,15 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
             return handlePlaybackGesture(event);
         }
         return super.dispatchTouchEvent(event);
+    }
+
+    private boolean jarPageOwnsInput() {
+        return jarChannelRuntime != null && jarChannelRuntime.visible()
+                && !tvUiMenu.visible() && userScriptInstallOverlay == null
+                && (managementPanel == null || managementPanel.getVisibility() != View.VISIBLE)
+                && (channelListPanel == null || channelListPanel.getVisibility() != View.VISIBLE)
+                && (backPrompt == null || backPrompt.getVisibility() != View.VISIBLE)
+                && (videoControlsOverlay == null || !videoControlsOverlay.visible());
     }
 
     /** Captures both physical touch input and the synthetic fly-mouse path. */
@@ -14736,6 +14757,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         int rawKeyCode = event.getKeyCode();
         int keyCode = normalizeRemoteKeyCode(rawKeyCode);
         if (jarChannelRuntime != null && jarChannelRuntime.visible()
+                && backPrompt.getVisibility() != View.VISIBLE
                 && managementPanel.getVisibility() != View.VISIBLE
                 && channelListPanel.getVisibility() != View.VISIBLE
                 && (keyCode == KeyEvent.KEYCODE_DPAD_UP || keyCode == KeyEvent.KEYCODE_DPAD_DOWN
@@ -15011,6 +15033,22 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
             closeChannelList();
             return;
         }
+        if (jarChannelRuntime != null && jarChannelRuntime.visible()) {
+            long now = SystemClock.elapsedRealtime();
+            if (lastJarBackPressedAt > 0L && now - lastJarBackPressedAt <= EXIT_CONFIRM_TIMEOUT_MS) {
+                lastJarBackPressedAt = 0L;
+                clearWebCloseConfirmation();
+                jarChannelRuntime.close();
+                hideLoading();
+                openChannelList(true);
+            } else {
+                lastJarBackPressedAt = now;
+                lastBackPressedAt = 0L;
+                showBackPrompt(true);
+            }
+            return;
+        }
+        lastJarBackPressedAt = 0L;
         if(catchupProgram!=null){returnToLive();return;}
         if (webSourceView != null && webSourceView.isPageVisible()
                 && webSourceView.exitBrowserFullscreen()) return;
