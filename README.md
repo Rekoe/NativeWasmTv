@@ -2,6 +2,8 @@
 
 [English](README.en.md) · [Linux.do](https://linux.do/u/buhanzhe) · [恩山论坛](https://www.right.com.cn/forum/thread-8484303-1-1.html)
 
+**内测QQ群**: 1121401707(更快的bug响应和修复包)
+
 `nTv` 是一款面向 Android 电视、电视盒子、平板和手机的横屏直播播放器，重点优化遥控器操作、老旧设备兼容性和央视直播稳定性。
 
 ## 主要功能
