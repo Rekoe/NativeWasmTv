@@ -208,6 +208,22 @@ final class AutoUpdater {
     }
 
     String readManifest(String manifestUrl) throws IOException {
+        try {
+            return readManifestOnce(manifestUrl);
+        } catch (HttpStatusException error) {
+            if (error.status != HttpURLConnection.HTTP_NOT_FOUND) throw error;
+            URL original = new URL(manifestUrl.trim());
+            if (!original.getPath().endsWith("/version-lite.json")) throw error;
+            // Older releases only publish version.json. Keep the same release
+            // path and caller query; never treat other HTTP failures as absence.
+            String query = original.getQuery();
+            String fallback = new URL(original, "version.json"
+                    + (query == null ? "" : "?" + query)).toExternalForm();
+            return readManifestOnce(fallback);
+        }
+    }
+
+    private String readManifestOnce(String manifestUrl) throws IOException {
         // Keep the canonical URL here. NetworkClient owns accelerator selection
         // and failover; query parameters must never be appended to an empty route.
         HttpURLConnection connection = openConnection(
