@@ -35,10 +35,11 @@ public final class FoliaFullInstrumentation extends Instrumentation {
             android.view.accessibility.AccessibilityNodeInfo root=getUiAutomation().getRootInActiveWindow();
             if(root!=null){
                 for(android.view.accessibility.AccessibilityNodeInfo node:root.findAccessibilityNodeInfosByText(text)){
-                    if(node.isVisibleToUser()){
+                    if(node.isVisibleToUser()&&text.contentEquals(node.getText()==null?"":node.getText())){
                         android.view.accessibility.AccessibilityNodeInfo target=node;
                         while(target!=null&&!target.isClickable())target=target.getParent();
                         if(target!=null&&target.performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK)){SystemClock.sleep(200);return;}
+
                     }
                 }
                 java.util.ArrayDeque<android.view.accessibility.AccessibilityNodeInfo> queue=new java.util.ArrayDeque<>();queue.add(root);
@@ -68,26 +69,23 @@ public final class FoliaFullInstrumentation extends Instrumentation {
         File first=new File(directory,"NativeSelected.wav"),second=new File(directory,"NextSelected.wav"),lyric=new File(directory,"NativeSelected.lrc");
         for(File file:new File[]{first,second})try(FileOutputStream out=new FileOutputStream(file)){out.write(audio);}
         try(FileOutputStream out=new FileOutputStream(lyric)){out.write("[00:00.00]Native selection fixture".getBytes("UTF-8"));}
+        File nested=new File(directory,"NestedFixture");nested.mkdirs();File excluded=new File(nested,"Excluded.wav");try(FileOutputStream out=new FileOutputStream(excluded)){out.write(audio);}
         js(browser,"window.__pickResult='pending';var b=document.createElement('button');b.id='ntv-file-pick';b.innerHTML='<span>NativeFileSelectionFixture</span>';b.style.cssText='position:fixed;left:100px;top:100px;width:300px;height:80px;z-index:2147483647';b.onclick=()=>{window.__pickResult='pending';window.showDirectoryPicker().then(d=>{window.__pickedDirectory=d;window.__pickResult='selected'}).catch(e=>window.__pickResult=e.name)};document.body.appendChild(b)");
-        boolean systemPicker=!"true".equals(args.getString("nativePicker"))&&new Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*").resolveActivity(getTargetContext().getPackageManager())!=null;
-        ActivityMonitor cancelled=systemPicker?addMonitor(new IntentFilter(Intent.ACTION_CHOOSER),new ActivityResult(Activity.RESULT_CANCELED,null),true):null;
         tapText(browser,"NativeFileSelectionFixture");SystemClock.sleep(500);
-        if(!systemPicker)tapNativeText("取消");if(cancelled!=null)removeMonitor(cancelled);
-        if(systemPicker)check(cancelled.getHits()>0,"Native chooser was never launched");
+        tapNativeText("取消");
         check(js(browser,"window.__pickResult").contains("AbortError"),"Cancel did not settle picker: "+js(browser,"window.__pickResult"));
-        Intent selected=new Intent().setData(android.net.Uri.fromFile(first));
-        ClipData clip=ClipData.newRawUri("fixtures",android.net.Uri.fromFile(first));clip.addItem(new ClipData.Item(android.net.Uri.fromFile(second)));clip.addItem(new ClipData.Item(android.net.Uri.fromFile(lyric)));selected.setClipData(clip);
-        ActivityMonitor chosen=systemPicker?addMonitor(new IntentFilter(Intent.ACTION_CHOOSER),new ActivityResult(Activity.RESULT_OK,selected),true):null;
         js(browser,"window.__pickResult='pending'");tapText(browser,"NativeFileSelectionFixture");SystemClock.sleep(400);
-        if(!systemPicker){
-            tapNativeText(directory.getName());tapNativeText(first.getName());tapNativeText(second.getName());tapNativeText(lyric.getName());
+        {
+            tapNativeText(directory.getName());
+            check(!getUiAutomation().getRootInActiveWindow().findAccessibilityNodeInfosByText("3 个文件 · 2 首音乐 · 可导入 3 个文件").isEmpty(),"Folder counts differ");
+            check(!getUiAutomation().getRootInActiveWindow().findAccessibilityNodeInfosByText("1 个文件 · 1 首音乐").isEmpty(),"Child folder counts differ");
             android.graphics.Bitmap image=getUiAutomation().takeScreenshot();
             if(image!=null)try(FileOutputStream out=new FileOutputStream(new File(getTargetContext().getExternalFilesDir(null),"folia-native-picker.png"))){image.compress(android.graphics.Bitmap.CompressFormat.PNG,100,out);}finally{image.recycle();}
-            tapNativeText("导入 (3)");
+            tapNativeText("导入此文件夹 (3)");
         }
         long until=SystemClock.elapsedRealtime()+10000;
-        while(js(browser,"window.__pickResult").contains("pending")&&SystemClock.elapsedRealtime()<until)SystemClock.sleep(100);if(chosen!=null)removeMonitor(chosen);
-        if(systemPicker)check(chosen.getHits()>0,"Native multi-file chooser did not launch");check(js(browser,"window.__pickResult").contains("selected"),"Selection failed: "+js(browser,"window.__pickResult"));
+        while(js(browser,"window.__pickResult").contains("pending")&&SystemClock.elapsedRealtime()<until)SystemClock.sleep(100);
+        check(js(browser,"window.__pickResult").contains("selected"),"Selection failed: "+js(browser,"window.__pickResult"));
         js(browser,"window.__persist='pending';(async()=>{var files=[];for await(var h of __pickedDirectory.values())files.push([h.name,(await h.getFile()).size]);window.__chosenFiles=JSON.stringify(files);var r=indexedDB.open('ntv-file-test',1);r.onupgradeneeded=()=>r.result.createObjectStore('handles');r.onsuccess=()=>{var db=r.result,t=db.transaction('handles','readwrite');t.objectStore('handles').put(__pickedDirectory,'selected');t.oncomplete=()=>{db.close();window.__persist='saved'};t.onerror=()=>window.__persist=String(t.error)};})().catch(e=>window.__persist=String(e))");
         until=SystemClock.elapsedRealtime()+8000;while(js(browser,"window.__persist").contains("pending")&&SystemClock.elapsedRealtime()<until)SystemClock.sleep(100);
         check(js(browser,"window.__persist").contains("saved"),"Handles were not persisted: "+js(browser,"window.__persist"));
@@ -101,9 +99,9 @@ public final class FoliaFullInstrumentation extends Instrumentation {
         try(InputStream in=getContext().getAssets().open("folia-native-import.js")){js(browser,new String(RadioUiCatalog.read(in,32768),"UTF-8"));}
         until=SystemClock.elapsedRealtime()+25000;while(js(browser,"window.__upstreamImport").contains("pending")&&SystemClock.elapsedRealtime()<until)SystemClock.sleep(150);
         check(js(browser,"window.__upstreamImport.startsWith('{')&&JSON.parse(window.__upstreamImport).count===2&&JSON.parse(window.__upstreamImport).localPlayback===true").equals("true"),"Original Folia importer or local playback failed: "+js(browser,"window.__upstreamImport"));
-        Bundle evidence=new Bundle();evidence.putString("stream","Local file evidence: systemPicker="+systemPicker+"; "+js(browser,"window.__upstreamImport"));sendStatus(0,evidence);
+        Bundle evidence=new Bundle();evidence.putString("stream","Native folder evidence: counts=3 files / 2 songs; child=1 file / 1 song; nested audio excluded; "+js(browser,"window.__upstreamImport"));sendStatus(0,evidence);
         js(browser,"indexedDB.deleteDatabase('ntv-file-test')");
-        for(File file:new File[]{first,second,lyric})file.delete();directory.delete();
+        for(File file:new File[]{first,second,lyric,excluded})file.delete();nested.delete();directory.delete();
     }
     private void trustFixture()throws Exception{
         java.security.cert.Certificate cert;try(InputStream in=new FileInputStream(args.getString("cert"))){cert=java.security.cert.CertificateFactory.getInstance("X.509").generateCertificate(in);}
@@ -193,7 +191,7 @@ public final class FoliaFullInstrumentation extends Instrumentation {
             check(!runtime.visible(),"Second BACK did not close the plugin");
             check(!activity.isFinishing(),"Second BACK exited the host instead of returning home");
             check(((android.view.View)field(activity,"channelListPanel")).getVisibility()==android.view.View.VISIBLE,"Channel home not shown");
-            result.putString("stream","PASS: official source frontend mounted; real touch and fly mouse clicks at 100%/150%; original navigation; dark Settings controls and polyfills; HTTP autoplay and native file selection/cancel/persist and upstream WAV+LRC import; double BACK closes plugin and returns home");code=-1;
+            result.putString("stream","PASS: official source frontend mounted; real touch and fly mouse clicks at 100%/150%; original navigation; dark Settings controls and polyfills; HTTP autoplay; native folder selection/cancel/counts/persist, nested audio excluded, upstream WAV+LRC import and local playback; double BACK closes plugin and returns home");code=-1;
         }catch(Throwable e){result.putString("stream",android.util.Log.getStackTraceString(e));}
         finally{if(activity!=null)runOnMainSync(()->activity.finish());if(wake.isHeld())wake.release();}finish(code,result);
     }

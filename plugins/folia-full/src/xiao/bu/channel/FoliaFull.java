@@ -81,13 +81,10 @@ public final class FoliaFull implements ChannelPlugin {
                         view.evaluateJavascript("window.__NTV_FOLIA_FILES__&&window.__NTV_FOLIA_FILES__.cancel()",null);
                 };
                 String mime=types.length==1&&types[0].matches("[a-zA-Z0-9.+-]+/[a-zA-Z0-9.*+-]+")?types[0]:"*/*";
-                android.content.Intent document=new android.content.Intent(android.content.Intent.ACTION_OPEN_DOCUMENT).addCategory(android.content.Intent.CATEGORY_OPENABLE).setType(mime);
-                // Older vendor pickers can silently ignore EXTRA_ALLOW_MULTIPLE.
-                boolean legacyMulti=android.os.Build.VERSION.SDK_INT<=28&&params.getMode()==FileChooserParams.MODE_OPEN_MULTIPLE;
-                if(!legacyMulti&&host instanceof ChannelPlugin.BrowserHost&&document.resolveActivity(context.getPackageManager())!=null)
+                if(!"application/x-ntv-folia-directory".equals(mime)&&host instanceof ChannelPlugin.BrowserHost)
                     ((ChannelPlugin.BrowserHost)host).chooseFiles(result,mime,params.getMode()==FileChooserParams.MODE_OPEN_MULTIPLE);
                 else if(context instanceof android.app.Activity){
-                    if(localPicker==null)localPicker=new FoliaLocalPicker((android.app.Activity)context);
+                    if(localPicker==null)localPicker=new FoliaLocalPicker((android.app.Activity)context,host);
                     localPicker.open(result,params.getMode()==FileChooserParams.MODE_OPEN_MULTIPLE);
                 }else result.onReceiveValue(null);
                 return true;

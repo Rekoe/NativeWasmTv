@@ -78,7 +78,12 @@ final class JarChannelRuntime {
                     ChannelPlugin incoming=null;
                     try {
                         incoming=type.getConstructor().newInstance();
-                        View content=incoming.create(context,loader,spec.config,new ChannelPlugin.BrowserHost(){
+                        View content=incoming.create(context,loader,spec.config,new ChannelPlugin.DirectoryHost(){
+                            public void chooseDirectory(android.webkit.ValueCallback<android.net.Uri[]> selected){
+                                if(token!=generation||!callbackCurrent()){selected.onReceiveValue(null);return;}
+                                if(context instanceof android.app.Activity)filePicker.openDirectory((android.app.Activity)context,selected);
+                                else selected.onReceiveValue(null);
+                            }
                             public void chooseFiles(android.webkit.ValueCallback<android.net.Uri[]> callback,String accept,boolean multiple){
                                 if(token!=generation||!callbackCurrent()){callback.onReceiveValue(null);return;}
                                 if(context instanceof android.app.Activity)filePicker.open((android.app.Activity)context,callback,accept,multiple);

@@ -40,8 +40,8 @@
     pending=true;
     return new Promise(function(resolve,reject){
       var input=document.createElement('input');input.type='file';input.multiple=true;
-      // Keep the picker open to both audio and sidecar lyric files; no webkitdirectory on Android.
-      input.accept='*/*';input.style.cssText='position:fixed;left:-10000px;width:1px;height:1px';document.body.appendChild(input);
+      // Native folder marker; ordinary playlist/file inputs retain their normal chooser.
+      input.accept='application/x-ntv-folia-directory';input.style.cssText='position:fixed;left:-10000px;width:1px;height:1px';document.body.appendChild(input);
       function finish(error){if(!pending)return;pending=false;cancelPending=null;input.remove();error?reject(error):resolve(directory(input.files));}
       cancelPending=function(){finish(new DOMException('Selection cancelled','AbortError'));};
       input.addEventListener('change',function(){if(input.files&&input.files.length)finish();else finish(new DOMException('Selection cancelled','AbortError'));},{once:true});
