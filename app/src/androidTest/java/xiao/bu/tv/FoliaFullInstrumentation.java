@@ -193,8 +193,15 @@ public final class FoliaFullInstrumentation extends Instrumentation {
             check(js(browser,"typeof Promise.withResolvers==='function'&&typeof Object.groupBy==='function'").equals("true"),"Compatibility polyfills missing");
             android.graphics.Bitmap image=getUiAutomation().takeScreenshot();if(image!=null)try(FileOutputStream out=new FileOutputStream(new File(getTargetContext().getExternalFilesDir(null),"folia-full.png"))){image.compress(android.graphics.Bitmap.CompressFormat.PNG,100,out);}finally{image.recycle();}
             sendKeyDownUpSync(android.view.KeyEvent.KEYCODE_ESCAPE);SystemClock.sleep(400);
-            // Browser history must not trap the user: two BACK presses always close the plugin.
-            js(browser,"history.pushState({},'', '/?test-history=1')");
+            // Consume each real WebView history entry before arming the root-page exit prompt.
+            String originalLocation=js(browser,"location.href");
+            js(browser,"history.pushState({},'', '/?test-history=1');history.pushState({},'', '/?test-history=2')");
+            sendKeyDownUpSync(android.view.KeyEvent.KEYCODE_BACK);SystemClock.sleep(400);
+            check(js(browser,"location.search").contains("test-history=1"),"BACK did not pop the newest browser history entry");
+            check(runtime.visible()&&((Long)field(activity,"lastJarBackPressedAt"))==0L,"History BACK armed plugin exit");
+            sendKeyDownUpSync(android.view.KeyEvent.KEYCODE_BACK);SystemClock.sleep(400);
+            check(js(browser,"location.href").equals(originalLocation),"Second history BACK did not restore the original page");
+            check(runtime.visible()&&((Long)field(activity,"lastJarBackPressedAt"))==0L,"History navigation closed the plugin or armed exit");
             sendKeyDownUpSync(android.view.KeyEvent.KEYCODE_BACK);SystemClock.sleep(150);
             check(runtime.visible(),"First BACK closed the plugin");
             check(!activity.isFinishing(),"First BACK exited the host");

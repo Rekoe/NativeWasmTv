@@ -145,6 +145,10 @@ final class JarChannelRuntime {
         JarBrowserViewport.apply(browser,resolution,pageScale);
     }
     boolean visible(){return view!=null&&view.isShown();}
+    boolean goBackIfPossible(){
+        if(!visible()||browser==null||!browser.canGoBack())return false;
+        browser.goBack();return true;
+    }
     boolean dispatchMedia(android.view.KeyEvent event){
         if(!visible()||browser==null||!"ntv-channel-media".equals(browser.getTag()))return false;
         String action;

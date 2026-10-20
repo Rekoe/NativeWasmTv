@@ -15064,6 +15064,12 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
             return;
         }
         if (jarChannelRuntime != null && jarChannelRuntime.visible()) {
+            if (jarChannelRuntime.goBackIfPossible()) {
+                lastJarBackPressedAt = 0L;
+                lastBackPressedAt = 0L;
+                clearWebCloseConfirmation();
+                return;
+            }
             long now = SystemClock.elapsedRealtime();
             if (lastJarBackPressedAt > 0L && now - lastJarBackPressedAt <= EXIT_CONFIRM_TIMEOUT_MS) {
                 lastJarBackPressedAt = 0L;
