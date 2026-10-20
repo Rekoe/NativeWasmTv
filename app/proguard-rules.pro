@@ -59,4 +59,20 @@
 -keep interface xiao.bu.tv.jar.ChannelPlugin { *; }
 -keep interface xiao.bu.tv.jar.ChannelPlugin$Host { *; }
 -keep interface xiao.bu.tv.jar.ChannelPlugin$BrowserHost { *; }
+-keep interface xiao.bu.tv.jar.ChannelPlugin$DirectoryHost { *; }
+-keep interface xiao.bu.tv.jar.ChannelPlugin$NativeHost { *; }
+-keep interface xiao.bu.tv.jar.ChannelPlugin$NativePage { *; }
 -keepclassmembers class * implements xiao.bu.tv.jar.ChannelPlugin$Host { public *; }
+
+# Downloaded native channels call these public APIs outside the host's reachability graph.
+-keep class okhttp3.** { public protected *; }
+-keep interface okhttp3.** { *; }
+-keep class okio.** { public protected *; }
+-keep interface okio.** { *; }
+-keep class tv.danmaku.ijk.media.player.AbstractMediaPlayer { *; }
+-keep interface tv.danmaku.ijk.media.player.IMediaPlayer { *; }
+-keep interface tv.danmaku.ijk.media.player.IMediaPlayer$* { *; }
+-keep class tv.danmaku.ijk.media.player.MediaInfo { *; }
+-keep class tv.danmaku.ijk.media.player.IjkTimedText { *; }
+-keep interface tv.danmaku.ijk.media.player.misc.ITrackInfo { *; }
+-keep interface tv.danmaku.ijk.media.player.misc.IMediaFormat { *; }

@@ -1,0 +1,22 @@
+"""Check the published native-channel ABI and reject accidental host/library duplication."""
+import hashlib,json,pathlib,struct,zipfile
+folder=pathlib.Path(__file__).resolve().parents[1];jar=folder/'dist/bl.jar'
+assert hashlib.sha256(jar.read_bytes()).hexdigest()==(folder/'dist/bl.sha256').read_text().strip()
+with zipfile.ZipFile(jar) as z:
+    info=json.loads(z.read('channel-plugin.json'));assert info['minSdk']==14 and info['native'] and info['entry']=='xiao.bu.channel.bl.BlPlugin'
+    names=z.namelist();assert not any(n.endswith(('.so','.class','.html')) for n in names)
+    for license in ['NOTICE','LICENSE-newBV','LICENSE-ZXing']:assert license in names
+    dex=z.read('classes.dex')
+def word(offset):return struct.unpack_from('<I',dex,offset)[0]
+def string(index):
+    at=word(word(60)+4*index)
+    while dex[at]&128:at+=1
+    at+=1;return dex[at:dex.index(b'\0',at)].decode('utf-8',errors='replace')
+types=[string(word(word(68)+4*i)) for i in range(word(64))]
+defined=[]
+for i in range(word(96)):
+    at=word(100)+32*i;name=types[word(at)];defined.append(name)
+    assert name.startswith(('Lxiao/bu/channel/bl/','Lcom/google/zxing/')),name
+    if word(at+8)!=0xffffffff:assert types[word(at+8)] not in ['Landroid/app/Activity;','Landroid/app/Fragment;','Landroid/app/Service;','Landroid/webkit/WebView;']
+assert not any(t in types for t in ['Landroid/app/Activity;','Landroid/app/Fragment;','Landroid/webkit/WebView;','Landroid/media/MediaPlayer$OnTimedTextListener;'])
+print('PASS:',len(defined),'owned DEX classes; API 14 metadata; no Activity/WebView/native libraries or bundled host ABI classes;',jar.stat().st_size,'bytes')
