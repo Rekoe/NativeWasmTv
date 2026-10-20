@@ -49,6 +49,9 @@ public final class FoliaFullInstrumentation extends Instrumentation {
         }
         throw new AssertionError("Native chooser control missing: "+text);
     }
+    private boolean nativeText(String text){
+        long until=SystemClock.elapsedRealtime()+5000;while(SystemClock.elapsedRealtime()<until){android.view.accessibility.AccessibilityNodeInfo root=getUiAutomation().getRootInActiveWindow();if(root!=null&&!root.findAccessibilityNodeInfosByText(text).isEmpty())return true;SystemClock.sleep(100);}return false;
+    }
     private void mediaAndFiles(WebView browser)throws Exception {
         java.nio.ByteBuffer wav=java.nio.ByteBuffer.allocate(44+8000*2*4).order(java.nio.ByteOrder.LITTLE_ENDIAN);
         wav.put("RIFF".getBytes("US-ASCII")).putInt(wav.capacity()-8).put("WAVEfmt ".getBytes("US-ASCII")).putInt(16).putShort((short)1).putShort((short)1).putInt(8000).putInt(16000).putShort((short)2).putShort((short)16).put("data".getBytes("US-ASCII")).putInt(wav.capacity()-44);
@@ -72,16 +75,27 @@ public final class FoliaFullInstrumentation extends Instrumentation {
         File nested=new File(directory,"NestedFixture");nested.mkdirs();File excluded=new File(nested,"Excluded.wav");try(FileOutputStream out=new FileOutputStream(excluded)){out.write(audio);}
         js(browser,"window.__pickResult='pending';var b=document.createElement('button');b.id='ntv-file-pick';b.innerHTML='<span>NativeFileSelectionFixture</span>';b.style.cssText='position:fixed;left:100px;top:100px;width:300px;height:80px;z-index:2147483647';b.onclick=()=>{window.__pickResult='pending';window.showDirectoryPicker().then(d=>{window.__pickedDirectory=d;window.__pickResult='selected'}).catch(e=>window.__pickResult=e.name)};document.body.appendChild(b)");
         tapText(browser,"NativeFileSelectionFixture");SystemClock.sleep(500);
-        tapNativeText("取消");
+        sendKeyDownUpSync(android.view.KeyEvent.KEYCODE_BACK);SystemClock.sleep(200);
+        sendKeyDownUpSync(android.view.KeyEvent.KEYCODE_BACK);SystemClock.sleep(200);
         check(js(browser,"window.__pickResult").contains("AbortError"),"Cancel did not settle picker: "+js(browser,"window.__pickResult"));
         js(browser,"window.__pickResult='pending'");tapText(browser,"NativeFileSelectionFixture");SystemClock.sleep(400);
         {
-            tapNativeText(directory.getName());
-            check(!getUiAutomation().getRootInActiveWindow().findAccessibilityNodeInfosByText("3 个文件 · 2 首音乐 · 可导入 3 个文件").isEmpty(),"Folder counts differ");
-            check(!getUiAutomation().getRootInActiveWindow().findAccessibilityNodeInfosByText("1 个文件 · 1 首音乐").isEmpty(),"Child folder counts differ");
+            sendKeyDownUpSync(android.view.KeyEvent.KEYCODE_DPAD_UP);SystemClock.sleep(100);
+            sendKeyDownUpSync(android.view.KeyEvent.KEYCODE_DPAD_DOWN);SystemClock.sleep(100);
+            sendKeyDownUpSync(android.view.KeyEvent.KEYCODE_DPAD_CENTER);SystemClock.sleep(300);
+            check(nativeText("3 个文件 · 2 首音乐 · 可导入 3 个文件"),"Folder counts differ");
+            check(nativeText("1 个文件 · 1 首音乐"),"Child folder counts differ");
+            sendKeyDownUpSync(android.view.KeyEvent.KEYCODE_DPAD_CENTER);SystemClock.sleep(200);
+            check(nativeText("1 个文件 · 1 首音乐 · 可导入 1 个文件"),"Remote OK did not enter child folder");
+            sendKeyDownUpSync(android.view.KeyEvent.KEYCODE_BACK);SystemClock.sleep(200);
+            check(nativeText("3 个文件 · 2 首音乐 · 可导入 3 个文件"),"Remote BACK did not return to parent folder");
+            sendKeyDownUpSync(android.view.KeyEvent.KEYCODE_DPAD_RIGHT);SystemClock.sleep(100);
+            sendKeyDownUpSync(android.view.KeyEvent.KEYCODE_DPAD_LEFT);SystemClock.sleep(100);
+            sendKeyDownUpSync(android.view.KeyEvent.KEYCODE_DPAD_UP);SystemClock.sleep(100);
+            sendKeyDownUpSync(android.view.KeyEvent.KEYCODE_DPAD_RIGHT);SystemClock.sleep(100);
             android.graphics.Bitmap image=getUiAutomation().takeScreenshot();
             if(image!=null)try(FileOutputStream out=new FileOutputStream(new File(getTargetContext().getExternalFilesDir(null),"folia-native-picker.png"))){image.compress(android.graphics.Bitmap.CompressFormat.PNG,100,out);}finally{image.recycle();}
-            tapNativeText("导入此文件夹 (3)");
+            sendKeyDownUpSync(android.view.KeyEvent.KEYCODE_DPAD_CENTER);
         }
         long until=SystemClock.elapsedRealtime()+10000;
         while(js(browser,"window.__pickResult").contains("pending")&&SystemClock.elapsedRealtime()<until)SystemClock.sleep(100);

@@ -29,7 +29,7 @@ final class FoliaLocalPicker {
     private final List<Uri> files=new ArrayList<>();
     private ListView list;
     private TextView path,summary;
-    private Button confirm;
+    private Button confirm,cancelButton,parentButton;
     private int generation;
     FoliaLocalPicker(Activity activity,ChannelPlugin.Host host){this.activity=activity;this.host=host;}
     void open(ValueCallback<Uri[]> result,boolean multi){
@@ -53,9 +53,9 @@ final class FoliaLocalPicker {
     }
     private int dp(float value){return (int)(value*theme.getResources().getDisplayMetrics().density+.5f);}
     private GradientDrawable background(int color,int radius){GradientDrawable d=new GradientDrawable();d.setColor(color);d.setCornerRadius(dp(radius));return d;}
-    private android.graphics.drawable.StateListDrawable surface(int color){android.graphics.drawable.StateListDrawable d=new android.graphics.drawable.StateListDrawable();d.addState(new int[]{android.R.attr.state_focused},background(0xff4e786f,10));d.addState(new int[]{android.R.attr.state_pressed},background(0xff4e786f,10));d.addState(new int[]{},background(color,10));return d;}
+    private android.graphics.drawable.StateListDrawable surface(int color){android.graphics.drawable.StateListDrawable d=new android.graphics.drawable.StateListDrawable();GradientDrawable focus=background(0xffa3e8dc,10);focus.setStroke(dp(2),0xffffffff);d.addState(new int[]{android.R.attr.state_focused},focus);d.addState(new int[]{android.R.attr.state_pressed},background(0xffa3e8dc,10));d.addState(new int[]{},background(color,10));return d;}
     private TextView label(String text,int size,int color){TextView v=new TextView(theme);v.setText(text);v.setTextSize(size);v.setTextColor(color);return v;}
-    private Button button(String text){Button b=new Button(theme);b.setText(text);b.setTextSize(14);b.setAllCaps(false);b.setTextColor(0xffd7dce5);b.setBackground(surface(0xff303540));b.setMinHeight(dp(44));return b;}
+    private Button button(String text){Button b=new Button(theme);b.setText(text);b.setTextSize(14);b.setAllCaps(false);b.setTextColor(new android.content.res.ColorStateList(new int[][]{new int[]{android.R.attr.state_focused},new int[]{}},new int[]{0xff102521,0xffd7dce5}));b.setBackground(surface(0xff303540));b.setMinHeight(dp(44));return b;}
     private void show(){
         current=Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC);
         if(!current.isDirectory())current=Environment.getExternalStorageDirectory();
@@ -65,25 +65,58 @@ final class FoliaLocalPicker {
         if(callback==null||activity.isFinishing())return;
         LinearLayout body=new LinearLayout(theme);body.setOrientation(LinearLayout.VERTICAL);body.setPadding(dp(24),dp(20),dp(24),dp(18));body.setBackground(background(0xff20242d,18));
         TextView title=label("选择音乐文件夹",21,0xffffffff);title.setTypeface(null,Typeface.BOLD);body.addView(title);
-        TextView hint=label("导入当前文件夹的音乐和歌词，不包含子文件夹",13,0xffa6adbb);hint.setPadding(0,dp(8),0,dp(14));body.addView(hint);
+        TextView hint=label("方向键选择 · 确定进入 · 右键导入 · 返回上一级\n仅导入当前文件夹，不包含子文件夹",13,0xffa6adbb);hint.setPadding(0,dp(8),0,dp(14));body.addView(hint);
         path=label("",13,0xff80cbc4);path.setMaxLines(3);path.setPadding(dp(12),dp(10),dp(12),dp(10));path.setBackground(background(0xff292f39,9));body.addView(path);
         summary=label("",14,0xffc6cbd5);summary.setPadding(0,dp(14),0,dp(10));body.addView(summary);
         if(browse){
-            Button parent=button("↑  上一级");body.addView(parent,new LinearLayout.LayoutParams(-1,dp(44)));
-            parent.setOnClickListener(v->{File next=current.getParentFile();if(next!=null&&next.canRead()){current=next;refresh();}});
+            parentButton=button("↑  上一级");body.addView(parentButton,new LinearLayout.LayoutParams(-1,dp(44)));
+            parentButton.setOnClickListener(v->goParent());
             list=new ListView(theme);list.setDivider(null);list.setPadding(0,dp(6),0,dp(6));
+            GradientDrawable selected=background(0xff3b5659,10);selected.setStroke(dp(2),0xffa3e8dc);list.setSelector(selected);list.setDrawSelectorOnTop(false);
             body.addView(list,new LinearLayout.LayoutParams(-1,0,1));
             list.setOnItemClickListener((p,v,index,id)->{current=folders.get(index);refresh();});
         }
         LinearLayout actions=new LinearLayout(theme);actions.setGravity(Gravity.RIGHT);actions.setPadding(0,dp(14),0,0);
-        Button cancel=button("取消");actions.addView(cancel,new LinearLayout.LayoutParams(dp(88),dp(46)));
+        Button cancel=button("取消");cancelButton=cancel;actions.addView(cancel,new LinearLayout.LayoutParams(dp(88),dp(46)));
         confirm=button("导入此文件夹");confirm.setTextColor(0xff102521);confirm.setBackground(surface(0xff80cbc4));
         LinearLayout.LayoutParams positive=new LinearLayout.LayoutParams(dp(174),dp(46));positive.leftMargin=dp(12);actions.addView(confirm,positive);body.addView(actions);
         if(browse)body.setLayoutParams(new android.widget.FrameLayout.LayoutParams(-1,Math.min(dp(620),activity.getResources().getDisplayMetrics().heightPixels-dp(24))));
         dialog=new AlertDialog.Builder(theme).setView(body).create();
         dialog.setOnCancelListener(d->finish(null));dialog.setOnDismissListener(d->{if(callback!=null)finish(null);});
+        dialog.setOnKeyListener((d,key,event)->{
+            if(key==KeyEvent.KEYCODE_BACK&&browse){if(event.getAction()==KeyEvent.ACTION_UP&&!event.isCanceled()){if(!goParent())finish(null);}return true;}
+            if(key==KeyEvent.KEYCODE_DPAD_CENTER||key==KeyEvent.KEYCODE_ENTER||key==KeyEvent.KEYCODE_NUMPAD_ENTER){
+                if(event.getAction()==KeyEvent.ACTION_UP&&!event.isCanceled()){
+                    View focused=dialog.getCurrentFocus();
+                    if(browse&&focused==list){int index=Math.max(0,list.getSelectedItemPosition());if(index<folders.size()){current=folders.get(index);refresh();}}
+                    else if(focused instanceof Button&&focused.isEnabled())focused.performClick();
+                }
+                return true;
+            }
+            if(event.getAction()!=KeyEvent.ACTION_DOWN)return false;
+            View focused=dialog.getCurrentFocus();
+            if(browse&&focused==list){
+                if(key==KeyEvent.KEYCODE_DPAD_LEFT){goParent();return true;}
+                if(key==KeyEvent.KEYCODE_DPAD_RIGHT){focusAction();return true;}
+                if(key==KeyEvent.KEYCODE_DPAD_UP&&list.getSelectedItemPosition()<=0){parentButton.requestFocus();return true;}
+                if(key==KeyEvent.KEYCODE_DPAD_DOWN&&list.getSelectedItemPosition()>=folders.size()-1){focusAction();return true;}
+            }
+            if(browse&&focused==parentButton&&key==KeyEvent.KEYCODE_DPAD_DOWN){focusFolders(0);return true;}
+            if(browse&&(focused==cancelButton||focused==confirm)&&key==KeyEvent.KEYCODE_DPAD_UP){if(folders.isEmpty()&&parentButton.isEnabled())parentButton.requestFocus();else focusFolders(Math.max(0,folders.size()-1));return true;}
+            if(focused==confirm&&key==KeyEvent.KEYCODE_DPAD_LEFT){cancelButton.requestFocus();return true;}
+            if(focused==cancelButton&&key==KeyEvent.KEYCODE_DPAD_RIGHT){focusAction();return true;}
+            return false;
+        });
         cancel.setOnClickListener(v->finish(null));confirm.setOnClickListener(v->{if(!files.isEmpty())finish(files.toArray(new Uri[0]));});
         dialog.show();Window window=dialog.getWindow();if(window!=null){window.setBackgroundDrawableResource(android.R.color.transparent);window.setLayout(Math.min(dp(560),activity.getResources().getDisplayMetrics().widthPixels-dp(32)),browse?Math.min(dp(620),activity.getResources().getDisplayMetrics().heightPixels-dp(24)):-2);}
+    }
+    private void focusAction(){if(confirm.isEnabled())confirm.requestFocus();else cancelButton.requestFocus();}
+    private void focusFolders(int index){if(folders!=null&&!folders.isEmpty()){list.requestFocusFromTouch();list.setSelection(index);}else if(confirm.isEnabled())confirm.requestFocusFromTouch();else if(parentButton.isEnabled())parentButton.requestFocusFromTouch();else cancelButton.requestFocusFromTouch();}
+    private boolean goParent(){
+        File root=Environment.getExternalStorageDirectory(),previous=current;
+        if(current==null||current.equals(root))return false;
+        File next=current.getParentFile();if(next==null||!next.canRead()||!next.getAbsolutePath().startsWith(root.getAbsolutePath()+"/")&&!next.equals(root))return false;
+        current=next;refresh();int index=folders.indexOf(previous);if(index>=0)focusFolders(index);return true;
     }
     private static boolean supported(String name){return name.toLowerCase(Locale.ROOT).matches(".*\\.(mp3|flac|wav|ogg|opus|m4a|aac|wma|ape|aiff|alac|lrc|ttml|yrc|qrc|vtt|txt|png|jpe?g|webp)");}
     private static boolean music(String name){return name.toLowerCase(Locale.ROOT).matches(".*\\.(mp3|flac|wav|ogg|opus|m4a|aac|wma|ape|aiff|alac)");}
@@ -103,6 +136,7 @@ final class FoliaLocalPicker {
                 LinearLayout text=new LinearLayout(theme);text.setOrientation(LinearLayout.VERTICAL);text.addView(label(folder.getName(),16,0xfff0f2f6));TextView detail=label(counts(folder),12,0xffa6adbb);detail.setPadding(0,dp(4),0,0);text.addView(detail);row.addView(text,new LinearLayout.LayoutParams(0,-2,1));row.addView(label("›",24,0xffa6adbb));return row;
             }});
         path.setText(current.getAbsolutePath());setSummary(total,audio,children==null?"无法读取此文件夹":null);
+        parentButton.setEnabled(!current.equals(Environment.getExternalStorageDirectory()));focusFolders(0);
     }
     private void setSummary(int total,int audio,String error){
         summary.setText(error!=null?error:total+" 个文件 · "+audio+" 首音乐 · 可导入 "+files.size()+" 个文件");
