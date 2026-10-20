@@ -15,6 +15,13 @@ window.__upstreamImport='pending';
     if(songs.length!==2)throw Error('Expected 2 imported songs, got '+songs.length);
     if(!songs.some(s=>s.hasLocalLyrics&&s.localLyricsContent.includes('Native selection fixture')))throw Error('Sidecar lyrics were not imported');
     for(const song of songs)if((await song.fileHandle.getFile()).size===0)throw Error('Empty imported audio');
-    window.__upstreamImport=JSON.stringify({count:songs.length,lyrics:true,readable:true});
+    const url=URL.createObjectURL(await songs[0].fileHandle.getFile());
+    const audio=new Audio(url);
+    try{
+      await audio.play();
+      await new Promise(resolve=>setTimeout(resolve,500));
+      if(audio.paused||audio.currentTime<=0)throw Error('Selected local audio did not play');
+    }finally{audio.pause();URL.revokeObjectURL(url);}
+    window.__upstreamImport=JSON.stringify({count:songs.length,lyrics:true,readable:true,localPlayback:true});
   }finally{window.showDirectoryPicker=original;}
 })().catch(e=>window.__upstreamImport=String(e));

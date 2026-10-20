@@ -82,7 +82,9 @@ public final class FoliaFull implements ChannelPlugin {
                 };
                 String mime=types.length==1&&types[0].matches("[a-zA-Z0-9.+-]+/[a-zA-Z0-9.*+-]+")?types[0]:"*/*";
                 android.content.Intent document=new android.content.Intent(android.content.Intent.ACTION_OPEN_DOCUMENT).addCategory(android.content.Intent.CATEGORY_OPENABLE).setType(mime);
-                if(host instanceof ChannelPlugin.BrowserHost&&document.resolveActivity(context.getPackageManager())!=null)
+                // Older vendor pickers can silently ignore EXTRA_ALLOW_MULTIPLE.
+                boolean legacyMulti=android.os.Build.VERSION.SDK_INT<=28&&params.getMode()==FileChooserParams.MODE_OPEN_MULTIPLE;
+                if(!legacyMulti&&host instanceof ChannelPlugin.BrowserHost&&document.resolveActivity(context.getPackageManager())!=null)
                     ((ChannelPlugin.BrowserHost)host).chooseFiles(result,mime,params.getMode()==FileChooserParams.MODE_OPEN_MULTIPLE);
                 else if(context instanceof android.app.Activity){
                     if(localPicker==null)localPicker=new FoliaLocalPicker((android.app.Activity)context);

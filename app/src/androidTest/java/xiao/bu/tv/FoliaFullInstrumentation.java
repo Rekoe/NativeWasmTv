@@ -69,19 +69,24 @@ public final class FoliaFullInstrumentation extends Instrumentation {
         for(File file:new File[]{first,second})try(FileOutputStream out=new FileOutputStream(file)){out.write(audio);}
         try(FileOutputStream out=new FileOutputStream(lyric)){out.write("[00:00.00]Native selection fixture".getBytes("UTF-8"));}
         js(browser,"window.__pickResult='pending';var b=document.createElement('button');b.id='ntv-file-pick';b.innerHTML='<span>NativeFileSelectionFixture</span>';b.style.cssText='position:fixed;left:100px;top:100px;width:300px;height:80px;z-index:2147483647';b.onclick=()=>{window.__pickResult='pending';window.showDirectoryPicker().then(d=>{window.__pickedDirectory=d;window.__pickResult='selected'}).catch(e=>window.__pickResult=e.name)};document.body.appendChild(b)");
-        ActivityMonitor cancelled=addMonitor(new IntentFilter(Intent.ACTION_CHOOSER),new ActivityResult(Activity.RESULT_CANCELED,null),true);
-        boolean systemPicker=new Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*").resolveActivity(getTargetContext().getPackageManager())!=null;
+        boolean systemPicker=!"true".equals(args.getString("nativePicker"))&&new Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*").resolveActivity(getTargetContext().getPackageManager())!=null;
+        ActivityMonitor cancelled=systemPicker?addMonitor(new IntentFilter(Intent.ACTION_CHOOSER),new ActivityResult(Activity.RESULT_CANCELED,null),true):null;
         tapText(browser,"NativeFileSelectionFixture");SystemClock.sleep(500);
-        if(!systemPicker)tapNativeText("取消");removeMonitor(cancelled);
+        if(!systemPicker)tapNativeText("取消");if(cancelled!=null)removeMonitor(cancelled);
         if(systemPicker)check(cancelled.getHits()>0,"Native chooser was never launched");
         check(js(browser,"window.__pickResult").contains("AbortError"),"Cancel did not settle picker: "+js(browser,"window.__pickResult"));
         Intent selected=new Intent().setData(android.net.Uri.fromFile(first));
         ClipData clip=ClipData.newRawUri("fixtures",android.net.Uri.fromFile(first));clip.addItem(new ClipData.Item(android.net.Uri.fromFile(second)));clip.addItem(new ClipData.Item(android.net.Uri.fromFile(lyric)));selected.setClipData(clip);
-        ActivityMonitor chosen=addMonitor(new IntentFilter(Intent.ACTION_CHOOSER),new ActivityResult(Activity.RESULT_OK,selected),true);
+        ActivityMonitor chosen=systemPicker?addMonitor(new IntentFilter(Intent.ACTION_CHOOSER),new ActivityResult(Activity.RESULT_OK,selected),true):null;
         js(browser,"window.__pickResult='pending'");tapText(browser,"NativeFileSelectionFixture");SystemClock.sleep(400);
-        if(!systemPicker){tapNativeText(directory.getName());tapNativeText(first.getName());tapNativeText(second.getName());tapNativeText(lyric.getName());tapNativeText("导入 (3)");}
+        if(!systemPicker){
+            tapNativeText(directory.getName());tapNativeText(first.getName());tapNativeText(second.getName());tapNativeText(lyric.getName());
+            android.graphics.Bitmap image=getUiAutomation().takeScreenshot();
+            if(image!=null)try(FileOutputStream out=new FileOutputStream(new File(getTargetContext().getExternalFilesDir(null),"folia-native-picker.png"))){image.compress(android.graphics.Bitmap.CompressFormat.PNG,100,out);}finally{image.recycle();}
+            tapNativeText("导入 (3)");
+        }
         long until=SystemClock.elapsedRealtime()+10000;
-        while(js(browser,"window.__pickResult").contains("pending")&&SystemClock.elapsedRealtime()<until)SystemClock.sleep(100);removeMonitor(chosen);
+        while(js(browser,"window.__pickResult").contains("pending")&&SystemClock.elapsedRealtime()<until)SystemClock.sleep(100);if(chosen!=null)removeMonitor(chosen);
         if(systemPicker)check(chosen.getHits()>0,"Native multi-file chooser did not launch");check(js(browser,"window.__pickResult").contains("selected"),"Selection failed: "+js(browser,"window.__pickResult"));
         js(browser,"window.__persist='pending';(async()=>{var files=[];for await(var h of __pickedDirectory.values())files.push([h.name,(await h.getFile()).size]);window.__chosenFiles=JSON.stringify(files);var r=indexedDB.open('ntv-file-test',1);r.onupgradeneeded=()=>r.result.createObjectStore('handles');r.onsuccess=()=>{var db=r.result,t=db.transaction('handles','readwrite');t.objectStore('handles').put(__pickedDirectory,'selected');t.oncomplete=()=>{db.close();window.__persist='saved'};t.onerror=()=>window.__persist=String(t.error)};})().catch(e=>window.__persist=String(e))");
         until=SystemClock.elapsedRealtime()+8000;while(js(browser,"window.__persist").contains("pending")&&SystemClock.elapsedRealtime()<until)SystemClock.sleep(100);
@@ -95,7 +100,8 @@ public final class FoliaFullInstrumentation extends Instrumentation {
         check(js(browser,"window.__restoredLyric").contains("Native selection fixture"),"Persisted lyric bytes differ");
         try(InputStream in=getContext().getAssets().open("folia-native-import.js")){js(browser,new String(RadioUiCatalog.read(in,32768),"UTF-8"));}
         until=SystemClock.elapsedRealtime()+25000;while(js(browser,"window.__upstreamImport").contains("pending")&&SystemClock.elapsedRealtime()<until)SystemClock.sleep(150);
-        check(js(browser,"window.__upstreamImport.startsWith('{')&&JSON.parse(window.__upstreamImport).count===2").equals("true"),"Original Folia importer failed: "+js(browser,"window.__upstreamImport"));
+        check(js(browser,"window.__upstreamImport.startsWith('{')&&JSON.parse(window.__upstreamImport).count===2&&JSON.parse(window.__upstreamImport).localPlayback===true").equals("true"),"Original Folia importer or local playback failed: "+js(browser,"window.__upstreamImport"));
+        Bundle evidence=new Bundle();evidence.putString("stream","Local file evidence: systemPicker="+systemPicker+"; "+js(browser,"window.__upstreamImport"));sendStatus(0,evidence);
         js(browser,"indexedDB.deleteDatabase('ntv-file-test')");
         for(File file:new File[]{first,second,lyric})file.delete();directory.delete();
     }
