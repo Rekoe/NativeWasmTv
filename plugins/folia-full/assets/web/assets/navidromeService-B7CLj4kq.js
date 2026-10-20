@@ -1,1 +1,0 @@
-import{fr as e,vr as t}from"./bootstrap-zykuZ2jk.js";export{e as getNavidromeConfig,t as navidromeApi};
