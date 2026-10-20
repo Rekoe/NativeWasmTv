@@ -80,7 +80,7 @@ final class EpgManager {
     }
 
     private static final class EpgDatabase extends android.database.sqlite.SQLiteOpenHelper {
-        EpgDatabase(Context c){super(c,"epg-guide.db",null,1);}
+        EpgDatabase(Context c){super(c,"epg-guide.db",null,2);}
         public void onCreate(android.database.sqlite.SQLiteDatabase db){
             db.execSQL("CREATE TABLE sources(source TEXT PRIMARY KEY,resolved TEXT,validated INTEGER)");
             db.execSQL("CREATE TABLE aliases(source TEXT,alias TEXT,channel TEXT)");
@@ -91,7 +91,11 @@ final class EpgManager {
             db.execSQL("CREATE INDEX logo_source ON logos(source)");
         }
         public void onUpgrade(android.database.sqlite.SQLiteDatabase db,int oldVersion,int newVersion){
-            throw new IllegalStateException("Unsupported EPG database upgrade");
+            // v1 stored lossy channel identities (CCTV4 regions/4K collided).
+            // Rebuild this derived index from the retained XML backup once.
+            for(String table:new String[]{"aliases","logos","programmes","sources"})
+                db.execSQL("DROP TABLE IF EXISTS "+table);
+            onCreate(db);
         }
     }
     private final EpgDatabase database;
@@ -150,6 +154,26 @@ final class EpgManager {
     }
     private boolean freshDatabase(long validated){
         long now=System.currentTimeMillis();return validated<=now&&dayStart(validated)==dayStart(now);
+    }
+
+    private StoredGuide readCachedGuide(String source,int index){
+        synchronized(databaseLock){
+            StoredGuide stored=readDatabase(source);
+            if(stored!=null)return stored;
+            CacheSlot slot=cacheSlot(source,index);
+            SharedPreferences prefs=context.getSharedPreferences(CACHE_PREFS,Context.MODE_PRIVATE);
+            if(!source.equals(prefs.getString(slot.sourceKey,"")))return null;
+            try{
+                byte[] bytes=readCache(slot.file);
+                if(bytes.length==0)return null;
+                Guide restored=parse(bytes);
+                String resolved=prefs.getString(slot.resolvedKey,source);
+                resolveLogos(restored,resolved);
+                long validated=slot.file.lastModified();
+                saveDatabase(source,resolved,restored,validated);
+                return new StoredGuide(restored,resolved,validated);
+            }catch(Exception error){Log.w(TAG,"Unable to rebuild SQLite EPG from XML",error);return null;}
+        }
     }
 
     private final Context context;
@@ -235,15 +259,20 @@ final class EpgManager {
     }
 
     private static String channelIdFor(Guide snapshot, Channel channel) {
-        String requested = normalize(channel.epgId == null ? channel.name : channel.epgId);
-        String channelId = snapshot.channelByAlias.get(requested);
-        if (channelId == null) {
-            channelId = snapshot.channelByAlias.get(normalize(channel.name));
+        // XMLTV IDs are opaque. An explicit tvg-id wins over a display-name alias.
+        String exact=channel.epgId==null?"":channel.epgId.trim();
+        if(!exact.isEmpty()){
+            if(snapshot.programsByChannel.containsKey(exact))return exact;
+            String requested=normalize(exact);
+            String channelId=snapshot.channelByAlias.get(requested);
+            if(channelId!=null)return channelId;
+            if(snapshot.programsByChannel.containsKey(requested))return requested;
         }
-        if (channelId == null && snapshot.programsByChannel.containsKey(requested)) {
-            channelId = requested;
-        }
-        return channelId;
+        String name=channel.name.trim(),requested=normalize(name);
+        if(snapshot.programsByChannel.containsKey(name))return name;
+        String channelId=snapshot.channelByAlias.get(requested);
+        if(channelId!=null)return channelId;
+        return snapshot.programsByChannel.containsKey(requested)?requested:null;
     }
 
     private boolean restoringCache;
@@ -256,8 +285,8 @@ final class EpgManager {
             boolean restored=false;
             try{
                 Guide cached=new Guide();List<String> urls=new ArrayList<String>();
-                for(String source:sources){
-                    StoredGuide stored=readDatabase(source);
+                for(int i=0;i<sources.size();i++){
+                    StoredGuide stored=readCachedGuide(sources.get(i),i);
                     if(stored!=null){mergeGuide(cached,stored.guide);urls.add(stored.resolved);}
                 }
                 synchronized(EpgManager.this){
@@ -305,7 +334,7 @@ final class EpgManager {
                         SharedPreferences prefs=context.getSharedPreferences(CACHE_PREFS,Context.MODE_PRIVATE);
                         for(int i=0;i<sources.size();i++) {
                             if(requestId!=refreshGeneration)return;
-                            StoredGuide stored=readDatabase(sources.get(i));
+                            StoredGuide stored=readCachedGuide(sources.get(i),i);
                             restoredSources.put(sources.get(i),stored);
                             if(stored!=null&&!stored.guide.programsByChannel.isEmpty()){
                                 mergeGuide(disk,stored.guide);diskSources.add(stored.resolved);continue;
@@ -336,7 +365,7 @@ final class EpgManager {
                         if (requestId != refreshGeneration) return;
                         String source = sources.get(index);
                         try {
-                            LoadedGuide loaded = loadGuide(source, cacheSlot(source, index), restoredSources.containsKey(source)?restoredSources.get(source):readDatabase(source));
+                            LoadedGuide loaded = loadGuide(source, cacheSlot(source, index), restoredSources.containsKey(source)?restoredSources.get(source):readCachedGuide(source,index));
                             mergeGuide(merged, loaded.guide);
                             loadedSources.add(loaded.sourceUrl);
                             // Expose the first usable cold-load source before a
@@ -781,9 +810,11 @@ final class EpgManager {
             int event;
             while ((event = parser.next()) != XmlPullParser.END_DOCUMENT) {
                 if (event == XmlPullParser.START_TAG && "channel".equals(parser.getName())) {
-                    currentChannelId = normalize(parser.getAttributeValue(null, "id"));
+                    currentChannelId = xmlChannelId(parser.getAttributeValue(null, "id"));
                     if (currentChannelId.length() > 0) {
-                        result.channelByAlias.put(currentChannelId, currentChannelId);
+                        String alias=normalize(currentChannelId);
+                        // An opaque ID must not replace a preceding display name.
+                        if(!result.channelByAlias.containsKey(alias))result.channelByAlias.put(alias,currentChannelId);
                     }
                 } else if (event == XmlPullParser.END_TAG
                         && "channel".equals(parser.getName())) {
@@ -824,7 +855,7 @@ final class EpgManager {
 
     private static void parseProgramme(XmlPullParser parser, Guide result, long now, long today)
             throws Exception {
-        String channelId = normalize(parser.getAttributeValue(null, "channel"));
+        String channelId = xmlChannelId(parser.getAttributeValue(null, "channel"));
         long start = parseXmlTvTime(parser.getAttributeValue(null, "start"));
         long stop = parseXmlTvTime(parser.getAttributeValue(null, "stop"));
         String catchupId=parser.getAttributeValue(null,"catchup-id");
@@ -878,6 +909,8 @@ final class EpgManager {
         return -1L;
     }
 
+    private static String xmlChannelId(String raw){return raw==null?"":raw.trim();}
+
     static String normalize(String raw) {
         if (raw == null) {
             return "";
@@ -904,10 +937,13 @@ final class EpgManager {
             }
         }
         String result = normalized.toString();
+        if(result.equals("中文国际")||result.equals("中文国际亚洲")||result.equals("国际亚洲"))return "CCTV4";
+        if(result.equals("中文国际欧洲")||result.equals("国际欧洲"))return "CCTV4欧洲";
+        if(result.equals("中文国际美洲")||result.equals("国际美洲"))return "CCTV4美洲";
         if (result.startsWith("CCTV")) {
-            if ("CCTV4K".equals(result) || "CCTV8K".equals(result)) {
-                return result;
-            }
+            // Keep UHD channel identities even with a descriptive suffix.
+            if (result.startsWith("CCTV4K"))return "CCTV4K";
+            if (result.startsWith("CCTV8K"))return "CCTV8K";
             if (result.startsWith("CCTV16") && result.endsWith("4K")) {
                 return "CCTV16";
             }
@@ -920,6 +956,11 @@ final class EpgManager {
                 number.append('+');
             }
             if (number.length() > 4) {
+                if("CCTV4".contentEquals(number)){
+                    String region=result.substring(index);
+                    if(region.contains("欧洲")||region.equals("EUO")||region.equals("EU")||region.equals("EUROPE"))return "CCTV4欧洲";
+                    if(region.contains("美洲")||region.equals("AME")||region.equals("AMERICA")||region.equals("AMERICAS"))return "CCTV4美洲";
+                }
                 return number.toString();
             }
         }

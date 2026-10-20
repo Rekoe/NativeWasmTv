@@ -26,7 +26,7 @@ public final class EpgSqliteInstrumentation extends Instrumentation {
             EpgManager cold=new EpgManager(getTargetContext());Object restored=read.invoke(cold,source);
             check(restored!=null,"Cold SQLite cache missing");
             Object snapshot=field(restored,"guide");Map programmes=(Map)field(snapshot,"programsByChannel");
-            List rows=(List)programmes.get("TEST");check(rows!=null&&rows.size()==1,"Programmes lost");
+            List rows=(List)programmes.get("test");check(rows!=null&&rows.size()==1,"Programmes lost");
             EpgManager.Program programme=(EpgManager.Program)rows.get(0);
             check("Persistent programme".equals(programme.title)&&"replay-1".equals(programme.catchupId),"Programme fields lost");
             check(((Map)field(snapshot,"logosByChannel")).size()==1,"Logo lost");
@@ -37,7 +37,7 @@ public final class EpgSqliteInstrumentation extends Instrumentation {
             rows.set(0,new EpgManager.Program(now,now+3600000,null,""));
             try{save.invoke(cold,source,source,snapshot,now);throw new AssertionError("Bad transaction accepted");}catch(InvocationTargetException expected){}
             Object rolledBack=read.invoke(cold,source);Map intact=(Map)field(field(rolledBack,"guide"),"programsByChannel");
-            check("Persistent programme".equals(((EpgManager.Program)((List)intact.get("TEST")).get(0)).title),"Rollback lost old guide");
+            check("Persistent programme".equals(((EpgManager.Program)((List)intact.get("test")).get(0)).title),"Rollback lost old guide");
             android.database.sqlite.SQLiteOpenHelper helper=(android.database.sqlite.SQLiteOpenHelper)field(cold,"database");
             for(String table:new String[]{"sources","aliases","logos","programmes"})helper.getWritableDatabase().delete(table,"source=?",new String[]{source});helper.close();
             code=-1;result.putString("stream","PASS SQLite cold restore, programme/alias/logo/catchup preservation, same-day offline refresh and failed-write rollback\n");
