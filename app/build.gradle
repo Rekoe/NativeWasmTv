@@ -26,11 +26,15 @@ if (releaseSigningAvailable) {
 }
 
 android {
+    namespace 'xiao.bu.tv'
+    buildFeatures { buildConfig true }
+    // The prebuilt native libraries are already stripped; preserve the audited binaries.
+    packagingOptions { jniLibs { keepDebugSymbols += ['**/*.so'] } }
     if (project.hasProperty('cjsV5Assets')) {
         sourceSets.androidTest.assets.srcDir project.property('cjsV5Assets')
     }
-    compileSdkVersion 30
-    buildToolsVersion '27.0.3'
+    compileSdkVersion 34
+    buildToolsVersion '35.0.0'
     testBuildType project.findProperty('testBuildType') ?: 'debug'
 
     signingConfigs {
@@ -48,6 +52,8 @@ android {
         applicationId project.hasProperty('applicationIdOverride')
                 ? project.property('applicationIdOverride').toString() : 'xiao.bu.tv'
         minSdkVersion 14
+        // One 320x180 fallback for API 14-20; API 21+ keeps the original vector.
+        vectorDrawables.generatedDensities = ['xhdpi']
         // API 25 keeps the legacy package-installer flow without declaring
         // REQUEST_INSTALL_PACKAGES, while remaining installable on Android 15.
         targetSdkVersion configuredTargetSdk
@@ -110,10 +116,10 @@ android {
             buildConfigField 'String', 'MP4_FINALIZER_SOURCE_URL', '""'
         }
         release {
-            // Remove unreachable Java code but preserve class names for old-device
-            // reflection, readable crash traces and release APK validation.
+            // R8 removes unused code, optimizes bytecode and shortens internal names.
+            // JNI, JavaScript and downloaded plugin entry points stay in the keep rules.
             minifyEnabled true
-            shrinkResources false
+            shrinkResources true
             if (releaseSigningAvailable) {
                 signingConfig signingConfigs.iptvRelease
             }
@@ -132,7 +138,7 @@ android {
                     '"https://raw.githubusercontent.com/buhanzhe/NativeWasmTv/gh-pages/video-recorder.html"'
             buildConfigField 'String', 'MP4_FINALIZER_SOURCE_URL',
                     '"https://raw.githubusercontent.com/buhanzhe/NativeWasmTv/gh-pages/mp4-finalizer.js"'
-            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
             testProguardFile 'proguard-test-rules.pro'
             if (project.findProperty('testRunner') == 'xiao.bu.tv.CjsV5Instrumentation') {
                 proguardFile 'proguard-cjs-test.pro'
@@ -177,8 +183,8 @@ task packageWebkitCorePair(type: Jar) {
             'androidx/core/util/ObjectsCompat.class']
     inputs.property 'retainedClasses', retainedClasses
     inputs.files configurations.webkitCorePair
-    archiveName = 'webkit-core-pair.jar'
-    destinationDir = file("$buildDir/generated/webkit")
+    archiveFileName.set('webkit-core-pair.jar')
+    destinationDirectory.set(file("$buildDir/generated/webkit"))
     from({
         File classes = zipTree(configurations.webkitCorePair.singleFile)
                 .matching { include 'classes.jar' }.singleFile

@@ -15,6 +15,19 @@ public final class EpgSqliteInstrumentation extends Instrumentation {
     public void onStart(){Bundle result=new Bundle();int code=1;
         String source="https://sqlite-regression.invalid/epg.xml";
         try{
+            EpgManager streaming=new EpgManager(getTargetContext());
+            java.io.File backup=java.io.File.createTempFile("epg-stream-", ".xml",getTargetContext().getCacheDir());
+            try {
+                byte[] padding=new byte[16384];java.util.Arrays.fill(padding,(byte)' ');
+                try(java.io.OutputStream out=new java.io.BufferedOutputStream(new java.io.FileOutputStream(backup))){
+                    out.write("<tv><channel id=\"stream\"><display-name>Streaming</display-name></channel>".getBytes("UTF-8"));
+                    for(int i=0;i<448;i++){out.write("<ignored>".getBytes("UTF-8"));out.write(padding);out.write("</ignored>".getBytes("UTF-8"));}
+                    out.write("</tv>".getBytes("UTF-8"));
+                }
+                Method cached=EpgManager.class.getDeclaredMethod("readCache",java.io.File.class);cached.setAccessible(true);
+                Object streamed=cached.invoke(streaming,backup);
+                check("stream".equals(((Map)field(streamed,"channelByAlias")).get("STREAMING")),"Large XML cache did not stream");
+            }finally{backup.delete();((android.database.sqlite.SQLiteOpenHelper)field(streaming,"database")).close();}
             long now=System.currentTimeMillis();
             SimpleDateFormat format=new SimpleDateFormat("yyyyMMddHHmmss Z",Locale.US);
             String xml="<tv><channel id=\"test\"><display-name>SQLite Test</display-name><icon src=\"https://example.org/logo.png\"/></channel><programme channel=\"test\" start=\""+format.format(new Date(now-60000))+"\" stop=\""+format.format(new Date(now+3600000))+"\" catchup-id=\"replay-1\"><title>Persistent programme</title></programme></tv>";
@@ -40,7 +53,7 @@ public final class EpgSqliteInstrumentation extends Instrumentation {
             check("Persistent programme".equals(((EpgManager.Program)((List)intact.get("test")).get(0)).title),"Rollback lost old guide");
             android.database.sqlite.SQLiteOpenHelper helper=(android.database.sqlite.SQLiteOpenHelper)field(cold,"database");
             for(String table:new String[]{"sources","aliases","logos","programmes"})helper.getWritableDatabase().delete(table,"source=?",new String[]{source});helper.close();
-            code=-1;result.putString("stream","PASS SQLite cold restore, programme/alias/logo/catchup preservation, same-day offline refresh and failed-write rollback\n");
+            code=-1;result.putString("stream","PASS 7 MiB streaming XML backup, SQLite cold restore, programme/alias/logo/catchup preservation, same-day offline refresh and failed-write rollback\n");
         }catch(Throwable error){result.putString("stream",android.util.Log.getStackTraceString(error));}
         finish(code,result);
     }

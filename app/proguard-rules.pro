@@ -16,9 +16,7 @@
 -keepattributes SourceFile,LineNumberTable
 -renamesourcefileattribute SourceFile
 
-# Release only shrinks unreachable code. Keep names and disable bytecode
-# optimization so old TV reflection and readable crash traces remain stable.
--dontobfuscate
+# Internal names may be shortened; preserve dynamically invoked entry points below.
 -keep class xiao.bu.tv.PlayerRootLayout { public <init>(...); }
 -keep interface xiao.bu.tv.radio.RadioUi { *; }
 
@@ -31,11 +29,6 @@
 -keepclassmembers class * extends android.webkit.WebChromeClient {
     public void openFileChooser(...);
 }
-
-# WebKit's API 33 helper is SDK-gated internally; this project compiles against 30.
-# Do not suppress warnings for the rest of AndroidX or our application code.
--dontwarn androidx.webkit.internal.ApiHelperForTiramisu
--dontwarn androidx.webkit.internal.StartupApiFeature
 
 -keep class xiao.bu.tv.NativeQuickJs { *; }
 -keep class xiao.bu.tv.LegacyTlsSocket { *; }

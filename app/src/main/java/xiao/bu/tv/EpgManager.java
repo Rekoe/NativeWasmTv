@@ -9,10 +9,13 @@ import org.xmlpull.v1.XmlPullParser;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.io.BufferedInputStream;
 import java.io.File;
 import java.io.FileInputStream;
+import java.io.FilterInputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.PushbackInputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.text.ParseException;
@@ -42,6 +45,7 @@ final class EpgManager {
     private static final String CACHE_RESOLVED_URL = "resolved_url";
     private static final String CACHE_METADATA = "remote_metadata_v1";
     private static final int MAX_DOWNLOAD_BYTES = 8 * 1024 * 1024;
+    private static final int MAX_XML_BYTES = 64 * 1024 * 1024;
     private static final long KEEP_FUTURE_MS = 36L * 60L * 60L * 1000L;
 
     interface Listener {
@@ -164,9 +168,8 @@ final class EpgManager {
             SharedPreferences prefs=context.getSharedPreferences(CACHE_PREFS,Context.MODE_PRIVATE);
             if(!source.equals(prefs.getString(slot.sourceKey,"")))return null;
             try{
-                byte[] bytes=readCache(slot.file);
-                if(bytes.length==0)return null;
-                Guide restored=parse(bytes);
+                Guide restored=readCache(slot.file);
+                if(restored==null)return null;
                 String resolved=prefs.getString(slot.resolvedKey,source);
                 resolveLogos(restored,resolved);
                 long validated=slot.file.lastModified();
@@ -343,9 +346,8 @@ final class EpgManager {
                             if(!sources.get(i).equals(prefs.getString(slot.sourceKey,""))
                                     || isCacheFresh(slot.file))continue;
                             try {
-                                byte[] bytes=readCache(slot.file);
-                                if(bytes.length==0)continue;
-                                Guide restored=parse(bytes);
+                                Guide restored=readCache(slot.file);
+                                if(restored==null)continue;
                                 String resolved=prefs.getString(slot.resolvedKey,sources.get(i));
                                 resolveLogos(restored,resolved);mergeGuide(disk,restored);diskSources.add(resolved);
                             }catch(Exception ignored){Log.w(TAG,"Unable to restore cached EPG");}
@@ -423,15 +425,16 @@ final class EpgManager {
         boolean cacheMatches = sourceUrl.equals(preferences.getString(slot.sourceKey, ""));
         if(stored!=null&&freshDatabase(stored.validated)&&!stored.guide.programsByChannel.isEmpty())
             return new LoadedGuide(stored.guide,stored.resolved);
-        byte[] cached = stored==null&&cacheMatches ? readCache(slot.file) : new byte[0];
         Guide cachedGuide = stored==null?null:stored.guide;
         String cachedUrl = stored==null?preferences.getString(slot.resolvedKey, sourceUrl):stored.resolved;
-        if (cached.length > 0) {
+        if (stored == null && cacheMatches) {
             try {
-                cachedGuide = parse(cached);
-                resolveLogos(cachedGuide, cachedUrl);
-                saveDatabase(sourceUrl,cachedUrl,cachedGuide,slot.file.lastModified());
-                if (isCacheFresh(slot.file)) return new LoadedGuide(cachedGuide, cachedUrl);
+                cachedGuide = readCache(slot.file);
+                if (cachedGuide != null) {
+                    resolveLogos(cachedGuide, cachedUrl);
+                    saveDatabase(sourceUrl,cachedUrl,cachedGuide,slot.file.lastModified());
+                    if (isCacheFresh(slot.file)) return new LoadedGuide(cachedGuide, cachedUrl);
+                }
             } catch (Exception cacheError) {
                 if (!slot.file.delete()) Log.w(TAG, "Unable to remove invalid EPG cache");
                 cachedGuide = null;
@@ -607,17 +610,14 @@ final class EpgManager {
         return joined.toString();
     }
 
-    private byte[] readCache(File file) {
-        try {
-            RemoteFileMetadata.recover(file);
-            FileInputStream input = new FileInputStream(file);
-            try {
-                return readAll(input);
-            } finally {
-                input.close();
-            }
-        } catch (IOException ignored) {
-            return new byte[0];
+    private Guide readCache(File file) throws Exception {
+        RemoteFileMetadata.recover(file);
+        if (!file.isFile() || file.length() == 0L) return null;
+        if (file.length() > MAX_DOWNLOAD_BYTES) throw new IOException("节目单文件超过 8 MB");
+        // Avoid ByteArrayOutputStream growth and its full-size toByteArray copy
+        // while the old guide and video decoder are still using the heap.
+        try (InputStream input = new FileInputStream(file)) {
+            return parse(input);
         }
     }
 
@@ -796,11 +796,45 @@ final class EpgManager {
     }
 
     private static Guide parse(byte[] bytes) throws Exception {
-        InputStream input = new ByteArrayInputStream(bytes);
-        if (bytes.length >= 2 && (bytes[0] & 0xff) == 0x1f && (bytes[1] & 0xff) == 0x8b) {
-            input = new GZIPInputStream(input);
+        return parse(new ByteArrayInputStream(bytes));
+    }
+
+    /** Bound both the stored bytes and gzip expansion without buffering the guide. */
+    private static Guide parse(InputStream source) throws Exception {
+        try (InputStream owned = source;
+             PushbackInputStream header = new PushbackInputStream(new BufferedInputStream(
+                     new LimitedGuideInputStream(owned, MAX_DOWNLOAD_BYTES), 16 * 1024), 2)) {
+            int first = header.read(), second = header.read();
+            if (second >= 0) header.unread(second);
+            if (first >= 0) header.unread(first);
+            try (InputStream decoded = first == 0x1f && second == 0x8b
+                    ? new GZIPInputStream(header) : header) {
+                return parseXml(new LimitedGuideInputStream(decoded, MAX_XML_BYTES));
+            }
         }
-        try {
+    }
+
+    private static final class LimitedGuideInputStream extends FilterInputStream {
+        private final long limit;
+        private long count;
+        LimitedGuideInputStream(InputStream input, long limit) { super(input); this.limit = limit; }
+        @Override public int read() throws IOException {
+            int value = in.read();
+            if (value >= 0) consumed(1);
+            return value;
+        }
+        @Override public int read(byte[] buffer, int offset, int length) throws IOException {
+            int size = in.read(buffer, offset, (int) Math.min(length, limit - count + 1));
+            if (size > 0) consumed(size);
+            return size;
+        }
+        private void consumed(int size) throws IOException {
+            count += size;
+            if (count > limit) throw new IOException("节目单内容超过解析上限");
+        }
+    }
+
+    private static Guide parseXml(InputStream input) throws Exception {
             XmlPullParser parser = Xml.newPullParser();
             parser.setInput(input, null);
             Guide result = new Guide();
@@ -848,9 +882,6 @@ final class EpgManager {
                 });
             }
             return result;
-        } finally {
-            input.close();
-        }
     }
 
     private static void parseProgramme(XmlPullParser parser, Guide result, long now, long today)

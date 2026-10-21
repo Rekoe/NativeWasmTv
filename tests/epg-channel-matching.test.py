@@ -18,6 +18,7 @@ methods += src[src.index('    private static Guide parse('):src.rfind('\n}')]
 java = r'''import java.util.*;import java.io.*;import java.text.*;import java.util.zip.*;import org.xmlpull.v1.XmlPullParser;
 public class EpgMatchingCheck {
  static final long KEEP_PAST_MS=14L*86400000,KEEP_FUTURE_MS=36L*3600000;
+ static final int MAX_DOWNLOAD_BYTES=8*1024*1024,MAX_XML_BYTES=64*1024*1024;
  static class Xml {static XmlPullParser newPullParser(){return new org.kxml2.io.KXmlParser();}}
  static class Channel {String name,epgId;Channel(String name,String id){this.name=name;epgId=id;}}
  static class Program {
@@ -86,7 +87,32 @@ public class EpgMatchingCheck {
    lookup(parsed,"CCTV4中文国际",null,"CCTV4");
    lookup(parsed,"other","CCTV4CaseA","CCTV4CaseA");lookup(parsed,"other","CCTV4CaseB","CCTV4CaseB");
   }
+  // A near-limit disk backup must parse without allocating a full XML byte array.
+  File cache=File.createTempFile("epg-stream-",".xml");
+  try {
+   byte[] padding=new byte[16384];Arrays.fill(padding,(byte)' ');
+   try(OutputStream file=new FileOutputStream(cache)){
+    file.write("<tv><channel id=\"stream\"><display-name>Streaming</display-name></channel>".getBytes("UTF-8"));
+    for(int i=0;i<448;i++){file.write("<ignored>".getBytes("UTF-8"));file.write(padding);file.write("</ignored>".getBytes("UTF-8"));}
+    file.write("</tv>".getBytes("UTF-8"));
+   }
+   check(cache.length()>7*1024*1024,"Streaming fixture too small");
+   Guide streamed=parse(new FileInputStream(cache));
+   check("stream".equals(streamed.channelByAlias.get("STREAMING")),"Streaming cache lost aliases");
+   LimitedGuideInputStream exact=new LimitedGuideInputStream(new ByteArrayInputStream(new byte[8]),8);
+   check(exact.read(new byte[16])==8&&exact.read()==-1,"Exact stream limit rejected EOF");
+   try{new LimitedGuideInputStream(new ByteArrayInputStream(new byte[9]),8).read(new byte[16]);throw new AssertionError("Oversized stream accepted");}catch(IOException expected){}
+   final boolean[] closed={false};
+   try{parse(new ByteArrayInputStream(new byte[]{31,(byte)139,0}){public void close(){closed[0]=true;}});throw new AssertionError("Broken gzip accepted");}catch(IOException expected){}
+   check(closed[0],"Broken gzip leaked its source");
+   try(OutputStream file=new GZIPOutputStream(new FileOutputStream(cache))){
+    file.write("<tv>".getBytes("UTF-8"));for(int i=0;i<MAX_XML_BYTES/padding.length+1;i++){file.write("<ignored>".getBytes("UTF-8"));file.write(padding);file.write("</ignored>".getBytes("UTF-8"));}file.write("</tv>".getBytes("UTF-8"));
+   }
+   check(cache.length()<MAX_DOWNLOAD_BYTES,"Gzip fixture exceeds download limit");
+   try{parse(new FileInputStream(cache));throw new AssertionError("Unbounded gzip expansion accepted");}catch(Exception expected){check(expected.toString().contains("上限"),"Unexpected gzip failure: "+expected);}
+  }finally{cache.delete();}
   System.out.println("PASS "+checks+" EPG identity checks: CCTV4 Asia/Europe/Americas, 4K/8K suffixes, exact opaque IDs, missing schedules and source priority");
+  System.out.println("PASS streaming XML cache under a 16 MiB heap, exact/over-limit streams, gzip expansion limit and failure cleanup");
  }
 }'''.replace('METHODS', methods)
 
@@ -96,4 +122,4 @@ with tempfile.TemporaryDirectory() as folder:
     jdk = Path(os.environ.get('JAVA_HOME', root / '.codex-tmp/jdk8/runtime/jdk8u504-b01')) / 'bin'
     kxml = Path(os.environ.get('ANDROID_HOME', 'D:/android/sdk')) / 'tools/lib/kxml2-2.3.0.jar'
     subprocess.run([str(jdk / 'javac.exe'), '-encoding', 'UTF-8', '-cp', str(kxml), '-d', folder, str(source)], check=True)
-    subprocess.run([str(jdk / 'java.exe'), '-cp', folder+os.pathsep+str(kxml), 'EpgMatchingCheck'], check=True)
+    subprocess.run([str(jdk / 'java.exe'), '-Xmx16m', '-cp', folder+os.pathsep+str(kxml), 'EpgMatchingCheck'], check=True)
