@@ -14,6 +14,7 @@ p.add_argument('--skip-install',action='store_true',help='Reuse already installe
 p.add_argument('--skip-host-install',action='store_true',help='Keep the installed isolated host and install only instrumentation')
 p.add_argument('--embedded-runner',action='store_true',help='Runner is temporarily embedded in the explicitly selected host APK')
 p.add_argument('--errors',action='store_true',help='Inject HTTP/business/JSON/media faults and exercise the diagnostics UI')
+p.add_argument('--interactions',action='store_true',help='Exercise real player taps, overlays, remote focus and transient playback recovery')
 p.add_argument('--soak-seconds',type=int,default=0,help='Additional initial playback observation (fixture video is 40 seconds)')
 p.add_argument('--run-label',default='',help='Optional output suffix to preserve separate regression rounds')
 a=p.parse_args();root=pathlib.Path(__file__).resolve().parents[3];adb=[a.adb,'-s',a.serial]
@@ -37,11 +38,12 @@ if a.system:command+=' -e system true'
 if a.dash:command+=' -e dash true'
 if a.smoke:command+=' -e smoke true'
 if a.errors:command+=' -e errors true'
+if a.interactions:command+=' -e interactions true'
 if a.soak_seconds:command+=' -e soakSeconds '+str(a.soak_seconds)
 command+=' '+a.package+('' if a.embedded_runner else '.test')+'/xiao.bu.tv.BlPluginInstrumentation'
 out=root/'output/bl/tests'/(re.sub(r'[^a-zA-Z0-9_.-]','_',a.serial)+('-real' if a.real else '-fixture')+('-system' if a.system else '-dash' if a.dash else '-ijk')+('-smoke' if a.smoke else ''));out.mkdir(parents=True,exist_ok=True)
-if a.run_label or a.errors:
-    out=out.with_name(out.name+('-errors' if a.errors else '')+('-'+re.sub(r'[^a-zA-Z0-9_-]','_',a.run_label) if a.run_label else ''));out.mkdir(parents=True,exist_ok=True)
+if a.run_label or a.errors or a.interactions:
+    out=out.with_name(out.name+('-errors' if a.errors else '-interactions' if a.interactions else '')+('-'+re.sub(r'[^a-zA-Z0-9_-]','_',a.run_label) if a.run_label else ''));out.mkdir(parents=True,exist_ok=True)
 for name in ['bl-playing','bl-controls','bl-controls-screen','bl-home','bl-search','bl-history','bl-login','bl-settings','bl-episodes','bl-danmaku-settings','bl-live','bl-live-screen','bl-error']:(out/(name+'.png')).unlink(missing_ok=True)
 process=subprocess.Popen(adb+['shell',command],stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,encoding='utf-8',errors='replace')
 lines=[]
@@ -74,6 +76,6 @@ pid=re.search(r'BL_TEST_PID=(\d+)',text)
 if pid:logs='\n'.join(line for line in logs.splitlines() if re.match(r'^\d\d-\d\d\s+\S+\s+'+pid.group(1)+r'\s+',line))+'\n'
 else:logs='No target PID was reported; unrelated process logs were omitted.\n'
 (out/'logcat.txt').write_text(logs,encoding='utf-8')
-images=(['bl-http-error.png','bl-media-error.png'] if a.errors else ['bl-home.png','bl-search.png','bl-history.png','bl-login.png','bl-settings.png','bl-live.png']+([] if a.real or a.smoke else ['bl-episodes.png','bl-danmaku-settings.png','bl-controls.png'])) if 'PASS:' in text else ['bl-error.png']
+images=(['bl-interactions.png'] if a.interactions else ['bl-http-error.png','bl-media-error.png'] if a.errors else ['bl-home.png','bl-search.png','bl-history.png','bl-login.png','bl-settings.png','bl-live.png']+([] if a.real or a.smoke else ['bl-episodes.png','bl-danmaku-settings.png','bl-controls.png'])) if 'PASS:' in text else ['bl-error.png']
 for name in images:subprocess.run(adb+['pull','/sdcard/Android/data/'+a.package+'/files/'+name,str(out/name)])
 raise SystemExit(0 if 'PASS:' in text else 1)

@@ -17,7 +17,7 @@ final class BlImages {
     private volatile boolean closed;
     BlImages(BlApi api,ClassLoader assets){this.api=api;this.assets=assets;int size=(int)Math.min(6*1024*1024,Runtime.getRuntime().maxMemory()/10);cache=new LruCache<String,Bitmap>(size){protected int sizeOf(String key,Bitmap value){return value.getRowBytes()*value.getHeight();}};}
     Bitmap asset(String name){Bitmap found=cache.get("asset:"+name);if(found!=null)return found;try(InputStream in=assets.getResourceAsStream("assets/"+name)){if(in==null)return null;BitmapFactory.Options o=new BitmapFactory.Options();o.inPreferredConfig=name.equals("background.png")?Bitmap.Config.RGB_565:Bitmap.Config.ARGB_8888;Bitmap b=BitmapFactory.decodeStream(in,null,o);if(b!=null)cache.put("asset:"+name,b);return b;}catch(Exception e){return null;}}
-    void icon(ImageView image,String name){image.setImageBitmap(asset(name+".png"));}
+    void icon(ImageView image,String name){Bitmap bitmap=asset(name+".png");android.graphics.drawable.Drawable drawable=image.getDrawable();if(drawable instanceof android.graphics.drawable.BitmapDrawable&&((android.graphics.drawable.BitmapDrawable)drawable).getBitmap()==bitmap)return;image.setImageBitmap(bitmap);}
     void load(final ImageView image,String address,final boolean cover){
         if(address==null||address.isEmpty()){image.setTag("");image.setImageBitmap(asset(cover?"default_video.png":"default_avatar.png"));return;}
         if(address.startsWith("//"))address="https:"+address;
