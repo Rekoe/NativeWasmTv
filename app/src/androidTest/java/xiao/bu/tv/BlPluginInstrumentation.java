@@ -29,7 +29,14 @@ public final class BlPluginInstrumentation extends Instrumentation {
         do{runOnMainSync(new Runnable(){public void run(){target[0]=findButton(root,title);}});if(target[0]!=null&&target[0].isShown())break;SystemClock.sleep(100);}while(SystemClock.elapsedRealtime()<end);
         check(target[0]!=null&&target[0].isShown(),"Button missing: "+title);
         runOnMainSync(new Runnable(){public void run(){target[0].requestFocusFromTouch();}});SystemClock.sleep(350);int[] point=new int[2];runOnMainSync(new Runnable(){public void run(){target[0].getLocationOnScreen(point);}});float x=point[0]+target[0].getWidth()/2f,y=point[1]+target[0].getHeight()/2f;
-        long now=SystemClock.uptimeMillis();MotionEvent down=MotionEvent.obtain(now,now,MotionEvent.ACTION_DOWN,x,y,0),up=MotionEvent.obtain(now,now+60,MotionEvent.ACTION_UP,x,y,0);sendPointerSync(down);SystemClock.sleep(60);sendPointerSync(up);down.recycle();up.recycle();SystemClock.sleep(150);
+        long now=SystemClock.uptimeMillis();MotionEvent down=MotionEvent.obtain(now,now,MotionEvent.ACTION_DOWN,x,y,0),up=MotionEvent.obtain(now,now+60,MotionEvent.ACTION_UP,x,y,0);if(Build.VERSION.SDK_INT<=15){
+            down.setLocation(target[0].getWidth()/2f,target[0].getHeight()/2f);
+            up.setLocation(target[0].getWidth()/2f,target[0].getHeight()/2f);
+            runOnMainSync(new Runnable(){public void run(){target[0].dispatchTouchEvent(down);}});
+            SystemClock.sleep(60);
+            runOnMainSync(new Runnable(){public void run(){target[0].dispatchTouchEvent(up);}});
+        }else{sendPointerSync(down);SystemClock.sleep(60);sendPointerSync(up);}
+        down.recycle();up.recycle();SystemClock.sleep(150);
     }
     private void key(int code){sendKeyDownUpSync(code);SystemClock.sleep(200);}
     private static ListView findList(View node){if(node instanceof ListView)return (ListView)node;if(node instanceof ViewGroup){ViewGroup g=(ViewGroup)node;for(int i=0;i<g.getChildCount();i++){ListView l=findList(g.getChildAt(i));if(l!=null)return l;}}return null;}

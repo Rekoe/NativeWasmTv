@@ -158,7 +158,7 @@ public abstract class SharedTvUi implements TvUi {
             int handle=slots[2].getVisibility()==GONE?0:Math.max(32,Math.round(30*d));
             // Every theme exposes the host's guide. Theme 2 already reserved its
             // handle; add room in the others instead of narrowing channel names.
-            float groupTitle=titleWidth(slots[0],20,8,72);
+            float groupTitle=titleWidth(slots[0],20,8,100);
             float channelTitle=titleWidth(slots[1],20,xiao.bu.tv.ChannelNameWidth.MAX_CHARS,80);
             int groupDesired=Math.round((groupTitle+36)*d);
             // Width includes trailing breathing room even when the longest title fits exactly.
@@ -167,7 +167,7 @@ public abstract class SharedTvUi implements TvUi {
             boolean expanded=slots[3].getVisibility()!=GONE;
             int w=Math.min(limit,desiredBase+(expanded?Math.round(246*d):0));setMeasuredDimension(w,h);
             int base=Math.min(w,desiredBase),epg=expanded?Math.max(0,w-base):0;
-            int g=Math.min(groupDesired,Math.round(base*.42f));
+            int g=Math.min(Math.max(1,base-handle-1),Math.max(Math.round(132*d),Math.min(groupDesired,Math.round(base*.42f))));
             int channel=Math.max(1,base-g-handle),vertical=theme()==4?0:Math.round((theme()==3?20:theme()==2?12:6)*d);
             channelPitch=fittedRowHeight(Math.max(1,h-vertical*2),Math.round(rowHeight()*d));
             groupPitch=channelPitch;
@@ -444,13 +444,14 @@ public abstract class SharedTvUi implements TvUi {
             float font=menuTextSize(menuCategoryPitch(d,height,titles.length)/d);
             measure.setTextSize(font);
             float left=0,right=0;
-            for(String title:titles)right=Math.max(right,measure.measureText(title));
+            for(String title:titles)if(title!=null)right=Math.max(right,measure.measureText(title));
             // Fix the drawer width from all categories before showing it. Switching
             // between short and long submenus must never resize the popup.
             for(int i=0;i<titles.length;i++) {
                 Bundle all=events.options(i);
                 String[] items=all==null?null:all.getStringArray("items");
                 if(items!=null)for(String title:items){
+                    if(title==null)continue;
                     boolean radio=all.getInt("selected",-1)>=0||title.endsWith(" ●")||title.endsWith(" ○");
                     if(title.endsWith(" ●")||title.endsWith(" ○"))title=title.substring(0,title.length()-2);
                     left=Math.max(left,Math.min(font*6,measure.measureText(title)+(radio?20:0)));

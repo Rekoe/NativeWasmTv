@@ -288,7 +288,7 @@ public final class LegacyFullInstrumentation extends Instrumentation {
         finish(failures==0?-1:0,result);
     }
     private static int fdCount(){String[] files=new File("/proc/self/fd").list();return files==null?-1:files.length;}
-    private static final class Fixture implements java.io.Closeable {
+    static final class Fixture implements java.io.Closeable {
         final ServerSocket socket;final File root;final long archiveStart=System.currentTimeMillis()-7200000;
         final ExecutorService clients=Executors.newFixedThreadPool(4);volatile boolean running=true;
         Fixture(File root)throws Exception{this.root=root;check(new File(root,"video.mp4").isFile(),"Media fixture not pushed to "+root);socket=new ServerSocket(0,8,InetAddress.getByName("127.0.0.1"));

@@ -1210,7 +1210,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         epgFavorite = (TextView) findViewById(R.id.epg_favorite);
         epgToggle.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View view) {
-                if (!epgEnabled || !hasBrowsingEpg(browsingChannelPosition())) return;
+                if (!canOpenBrowsingEpg(browsingChannelPosition())) return;
                 epgExpanded = !epgExpanded;
                 showEpgForBrowsingChannel(browsingChannelPosition());
                 if(epgExpanded)focusEpgList();else{rememberEpgCursor();channelList.requestFocus();}
@@ -11730,7 +11730,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                     groupDesired + channelDesired + fixedWidth);
             int[] widths = fitTwoColumns(Math.max(2, panelWidth - fixedWidth),
                     groupDesired, channelDesired,
-                    Math.round(120f * density), Math.round(180f * density));
+                    groupDesired, Math.round(180f * density));
             setExactWidth(groupList, widths[0]);
             setExactWidth(channelList, widths[1]);
             setPanelWidth(panelWidth);
@@ -11742,7 +11742,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         int panelWidth = Math.min(maximumPanelWidth, desiredPanelWidth);
         int availableColumns = Math.max(3, panelWidth - fixedWidth);
 
-        int groupMinimum = Math.round(120f * density);
+        int groupMinimum = groupDesired;
         int channelMinimum = Math.round(180f * density);
         int epgMinimum = Math.round(220f * density);
         int[] widths = fitChannelColumns(availableColumns,
@@ -11778,13 +11778,16 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
     private int desiredGroupColumnWidth(float density) {
         // Some Android 4.0 vendor builds can stall in Paint.native_measureText while
         // the system font is initialized. This method runs synchronously from
-        // onCreate, so use the existing maximum width instead of risking an ANR.
+        // onCreate, so reserve five characters without measuring the legacy font.
         if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.ICE_CREAM_SANDWICH_MR1) {
-            return Math.round((14f * effectiveUiScale * 8f + 88f) * density);
+            // Legacy fonts/minimums can keep their baseline size at small presets.
+            float textDensity = Math.max(getResources().getDisplayMetrics().scaledDensity,
+                    density * getResources().getConfiguration().fontScale);
+            return (int)Math.ceil(14f * textDensity * 5f + 101f * density);
         }
         Paint paint = columnPaint(14f);
         float titleCapacity = paint.measureText("频道分组八字名称");
-        float widest = 0f;
+        float widest = paint.measureText("频道分类名");
         int widestCount = 1;
         for (ChannelCatalog.Group group : ChannelCatalog.GROUPS) {
             widest = Math.max(widest, paint.measureText(group.title));
@@ -11794,7 +11797,8 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         int countWidth = Math.max(Math.round(28f * density),
                 (int) Math.ceil(countPaint.measureText(String.valueOf(widestCount)))
                         + Math.round(12f * density));
-        int chrome = Math.round(61f * density);
+        // Row insets round independently at small UI scales.
+        int chrome = (int)Math.ceil(65f * density);
         return clamp((int) Math.ceil(widest) + countWidth + chrome,
                 Math.round(120f * density),
                 (int) Math.ceil(titleCapacity) + countWidth + chrome);
@@ -11847,8 +11851,9 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         }
         int minimumTotal = minimumFirst + minimumSecond + minimumThird;
         if (minimumTotal >= available) {
-            int first = Math.max(1, Math.round(available * 0.26f));
-            int second = Math.max(1, Math.round(available * 0.36f));
+            int first = Math.min(minimumFirst, Math.max(1, available - 2));
+            int second = Math.max(1, Math.round((available-first)
+                    * (minimumSecond / (float)(minimumSecond+minimumThird))));
             return new int[] { first, second, Math.max(1, available - first - second) };
         }
         int extra = available - minimumTotal;
@@ -11869,8 +11874,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         }
         int minimumTotal = minimumFirst + minimumSecond;
         if (minimumTotal >= available) {
-            int first = Math.max(1, Math.round(available
-                    * (minimumFirst / (float) minimumTotal)));
+            int first = Math.min(minimumFirst, Math.max(1, available - 1));
             return new int[] { first, Math.max(1, available - first) };
         }
         int extra = available - minimumTotal;
@@ -12067,14 +12071,22 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         return !epgManager.programsFor(channels[safe]).isEmpty();
     }
 
+    private boolean canOpenBrowsingEpg(int position) {
+        if (!epgEnabled) return false;
+        if (hasBrowsingEpg(position)) return true;
+        Toast.makeText(this, "当前节目暂无节目单", Toast.LENGTH_SHORT).show();
+        return false;
+    }
+
     private void showEpgForBrowsingChannel(int position) {
-        if (!epgEnabled) { epgExpanded = false; setEpgColumnVisible(false); return; }
+        if (!epgEnabled) { epgExpanded = false; epgToggle.setVisibility(View.GONE); setEpgColumnVisible(false); return; }
         if (epgManager == null || epgAdapter == null
                 || browsingGroupIndex < 0 || browsingGroupIndex >= ChannelCatalog.GROUPS.length) {
             return;
         }
         boolean available=hasBrowsingEpg(position);
-        epgToggle.setEnabled(available);
+        epgToggle.setVisibility(View.VISIBLE);
+        epgToggle.setEnabled(true);
         if(!available)epgExpanded=false;
         boolean horizontalGuide=TvUiPlugin.current()!=null&&"ui6".equals(TvUiPlugin.current().id);
         epgToggle.setText(horizontalGuide?(epgExpanded?"节目单  ‹":"节目单  ›"):
@@ -15002,11 +15014,14 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                         if (ChannelCatalog.GROUPS[browsingGroupIndex].channels.length > 0) {
                             enterChannelColumn();
                         }
-                    } else if (favoriteActionFocused && hasBrowsingEpg(channelList.getSelectedItemPosition())) {
-                        epgExpanded = true;
-                        showEpgForBrowsingChannel(channelList.getSelectedItemPosition());
-                        focusEpgList();
+                    } else if (favoriteActionFocused) {
+                        if (canOpenBrowsingEpg(channelList.getSelectedItemPosition())) {
+                            epgExpanded = true;
+                            showEpgForBrowsingChannel(channelList.getSelectedItemPosition());
+                            focusEpgList();
+                        }
                     } else if (channelList.hasFocus()) {
+                        canOpenBrowsingEpg(channelList.getSelectedItemPosition());
                         setFavoriteActionFocused(true);
                     }
                     return true;
