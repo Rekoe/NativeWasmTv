@@ -22,6 +22,7 @@ final class BlApi {
     private final List<Cookie> cookies=new ArrayList<>();
     private volatile boolean closed;
     private final Object signingLock=new Object();
+    private volatile long serverOffset;
     private String wbi="";private long wbiTime;private boolean bootstrapped;private JSONObject historyCursor=new JSONObject();
     BlApi(OkHttpClient client,SharedPreferences prefs,JSONObject config){
         this.client=client;this.prefs=prefs;this.config=config;
@@ -47,16 +48,17 @@ final class BlApi {
         Request.Builder b=new Request.Builder().url(parsed).header("User-Agent",UA).header("Referer",url.contains("/search/")?"https://search.bilibili.com/":url.contains("api.live.")?"https://live.bilibili.com/":"https://www.bilibili.com/");
         String cookie=cookieHeader(parsed);if(!cookie.isEmpty())b.header("Cookie",cookie);return b;
     }
-    Response execute(Request request)throws IOException{
-        if(closed)throw new IOException("频道已关闭");final Call call=client.newCall(request);pending.add(call);
+    Response execute(Request request)throws IOException{return execute(request,null);}
+    Response execute(Request request,final Set<Call> owner)throws IOException{
+        if(closed)throw new IOException("频道已关闭");final Call call=client.newCall(request);pending.add(call);if(owner!=null)owner.add(call);
         try{
             if(closed){call.cancel();throw new IOException("频道已关闭");}Response response=call.execute();final ResponseBody body=response.body();
-            if(body==null){pending.remove(call);return response;}
+            if(body==null){pending.remove(call);if(owner!=null)owner.remove(call);return response;}
             final okio.BufferedSource source=okio.Okio.buffer(new okio.ForwardingSource(body.source()){
-                public void close()throws IOException{try{super.close();}finally{pending.remove(call);}}
+                public void close()throws IOException{try{super.close();}finally{pending.remove(call);if(owner!=null)owner.remove(call);}}
             });
             return response.newBuilder().body(new OwnedBody(call,body.contentType(),body.contentLength(),source)).build();
-        }catch(IOException e){pending.remove(call);throw e;}
+        }catch(IOException e){pending.remove(call);if(owner!=null)owner.remove(call);throw e;}
     }
     private static final class OwnedBody extends ResponseBody {
         final Call call;final MediaType type;final long length;final okio.BufferedSource source;
@@ -73,11 +75,13 @@ final class BlApi {
         String replacement=origin.equals(API)?config.optString("apiOrigin",origin):origin.equals(PASSPORT)?config.optString("passportOrigin",origin):config.optString("liveOrigin",origin);
         return replacement.replaceAll("/$","")+path;
     }
-    JSONObject get(String origin,String path,Map<String,String> params,boolean sign)throws Exception{
+    private String query(String origin,String path,Map<String,String> params,boolean sign)throws Exception{
         TreeMap<String,String> query=new TreeMap<>(params);if(sign)sign(query);
         StringBuilder u=new StringBuilder(endpoint(origin,path));for(Map.Entry<String,String> p:query.entrySet()){u.append(u.indexOf("?")<0?'?':'&').append(encode(p.getKey())).append('=').append(encode(p.getValue()));}
-        return json(request(u.toString()).build());
+        return u.toString();
     }
+    JSONObject get(String origin,String path,Map<String,String> params,boolean sign)throws Exception{return json(request(query(origin,path,params,sign)).build());}
+    byte[] binary(String path,Map<String,String> params,int limit)throws Exception{return bytes(query(API,path,params,path.contains("/wbi/")),limit);}
     JSONObject get(String path,String... pairs)throws Exception{return get(API,path,map(pairs),path.contains("/wbi/"));}
     JSONObject post(String path,String... pairs)throws Exception{
         requireLogin();FormBody.Builder body=new FormBody.Builder();Map<String,String> data=map(pairs);data.put("csrf",cookie("bili_jct"));for(Map.Entry<String,String> p:data.entrySet())body.add(p.getKey(),p.getValue());
@@ -86,6 +90,7 @@ final class BlApi {
     private JSONObject json(Request request)throws Exception{
         try(Response r=execute(request)){
             receiveCookies(r);if(!r.isSuccessful()||r.body()==null)throw new IOException("服务响应 HTTP "+r.code());
+            try{java.text.SimpleDateFormat f=new java.text.SimpleDateFormat("EEE, dd MMM yyyy HH:mm:ss zzz",Locale.US);long server=f.parse(r.header("Date")).getTime()+Math.min(3600,Long.parseLong(r.header("Age","0")))*1000;long offset=server-System.currentTimeMillis();if(Math.abs(offset)<7L*86400000)serverOffset=offset;}catch(Exception ignored){}
             JSONObject value=new JSONObject(new String(read(r.body().byteStream(),8*1024*1024),"UTF-8"));int code=value.optInt("code",0);
             boolean navKeys=request.url().encodedPath().endsWith("/x/web-interface/nav")&&value.optJSONObject("data")!=null&&value.optJSONObject("data").optJSONObject("wbi_img")!=null;
             if(code!=0&&!navKeys)throw new ApiException(code,value.optString("message",value.optString("msg","请求失败")));
@@ -101,7 +106,7 @@ final class BlApi {
             JSONObject data=get(API,"/x/web-interface/nav",map(),false).optJSONObject("data");JSONObject keys=data==null?null:data.optJSONObject("wbi_img");if(keys==null)throw new IOException("暂时无法获取接口签名，请重试");
             String all=key(keys.getString("img_url"))+key(keys.getString("sub_url"));StringBuilder mixed=new StringBuilder();for(int i:MIX)if(i<all.length())mixed.append(all.charAt(i));if(mixed.length()<32)throw new IOException("接口签名无效");wbi=mixed.substring(0,32);wbiTime=System.currentTimeMillis();
         }
-        values.put("wts",String.valueOf(System.currentTimeMillis()/1000));TreeMap<String,String> sorted=new TreeMap<>(values);StringBuilder query=new StringBuilder();
+        values.put("wts",String.valueOf((System.currentTimeMillis()+serverOffset)/1000));TreeMap<String,String> sorted=new TreeMap<>(values);StringBuilder query=new StringBuilder();
         for(Map.Entry<String,String> e:sorted.entrySet()){String value=e.getValue().replaceAll("[!'()*]","");values.put(e.getKey(),value);if(query.length()>0)query.append('&');query.append(encode(e.getKey())).append('=').append(encode(value));}
         values.put("w_rid",md5(query+wbi));
     }}
@@ -123,6 +128,8 @@ final class BlApi {
         JSONObject d=data(get("/x/player/playurl","bvid",bvid,"cid",""+cid,"qn",""+quality,"fnval","1","fnver","0","fourk","0","type","mp4","platform","html5","otype","json"));
         if(d.has("v_voucher"))throw new ApiException(-352,"播放接口要求验证，请稍后重试或登录");return d;
     }
+    JSONObject playDash(String bvid,long cid,int quality)throws Exception{return data(get("/x/player/wbi/playurl","bvid",bvid,"cid",""+cid,"qn",""+quality,"fnval","16","fnver","0","fourk","1","prefer_codec","7"));}
+    JSONObject episodeDash(long ep,long cid,int quality)throws Exception{return data(get("/pgc/player/web/playurl","ep_id",""+ep,"cid",""+cid,"qn",""+quality,"fnval","16","fourk","1"));}
     JSONArray search(String word,String type,int page)throws Exception{return array(data(get("/x/web-interface/wbi/search/type","keyword",word,"search_type",type,"page",""+page,"page_size","24")),"result");}
     JSONArray history(int page)throws Exception{if(!signedIn())return new JSONArray(prefs.getString("history","[]"));if(page==1)historyCursor=new JSONObject();JSONObject value=data(get("/x/web-interface/history/cursor","ps","24","view_at",""+historyCursor.optLong("view_at"),"max",""+historyCursor.optLong("max"),"business",historyCursor.optString("business","archive")));JSONObject cursor=value.optJSONObject("cursor");if(cursor!=null)historyCursor=cursor;return array(value,"list");}
     JSONArray dynamic(String offset)throws Exception{requireLogin();return array(data(get("/x/polymer/web-dynamic/v1/feed/all","type","video","offset",offset)),"items");}
@@ -131,14 +138,15 @@ final class BlApi {
     JSONArray later()throws Exception{requireLogin();return array(data(get("/x/v2/history/toview")),"list");}
     JSONArray followed(int page)throws Exception{requireLogin();return array(data(get("/x/relation/followings","vmid",""+uid(),"pn",""+page,"ps","24","order","desc")),"list");}
     JSONArray uploads(long mid,int page)throws Exception{return array(data(get("/x/space/wbi/arc/search","mid",""+mid,"pn",""+page,"ps","24","order","pubdate")).optJSONObject("list"),"vlist");}
-    JSONArray region(int rid,int page)throws Exception{return array(data(get("/x/web-interface/dynamic/region","rid",""+rid,"pn",""+page,"ps","24")),"archives");}
+    JSONArray region(int rid,int page)throws Exception{JSONObject d=data(get("/x/web-interface/region/feed/rcmd","from_region",""+rid,"display_id",""+page,"request_cnt","24","device","web","plat","30"));JSONArray list=array(d,"archives");return list.length()>0?list:array(d,"items");}
     JSONArray seasons(int page)throws Exception{return array(data(get("/pgc/season/index/result","season_type","1","type","1","page",""+page,"pagesize","24","order","3","sort","0")),"list");}
     JSONObject season(long id)throws Exception{return data(get("/pgc/view/web/season","season_id",""+id));}
     JSONObject episodePlay(long episode,long cid,int quality)throws Exception{return data(get("/pgc/player/web/playurl","ep_id",""+episode,"cid",""+cid,"qn",""+quality,"fnval","1","fourk","0"));}
     JSONArray comments(long aid,int page)throws Exception{return array(data(get("/x/v2/reply","type","1","oid",""+aid,"pn",""+page,"ps","20","sort","2")),"replies");}
     JSONArray subtitles(String bvid,long cid)throws Exception{JSONObject sub=data(get("/x/player/wbi/v2","bvid",bvid,"cid",""+cid)).optJSONObject("subtitle");return array(sub,"subtitles");}
     JSONArray live(int page)throws Exception{return array(data(get(LIVE,"/xlive/web-interface/v1/webMain/getMoreRecList",map("platform","web","page",""+page),false)),"recommend_room_list");}
-    JSONObject livePlay(long room)throws Exception{return data(get(LIVE,"/room/v1/Room/playUrl",map("cid",""+room,"platform","h5","quality","4"),false));}
+    JSONObject livePlay(long room,int quality,boolean system)throws Exception{try{return BlLiveStreams.select(data(get(LIVE,"/xlive/web-room/v2/index/getRoomPlayInfo",map("room_id",""+room,"protocol","0,1","format","0,1,2","codec","0","qn",""+quality,"platform","web","ptype","8"),false)),system);}catch(Exception e){return BlLiveStreams.legacy(data(get(LIVE,"/room/v1/Room/playUrl",map("cid",""+room,"platform","h5","quality","4","qn",""+quality),false)));}}
+    JSONObject liveLegacy(long room,int quality)throws Exception{return BlLiveStreams.legacy(data(get(LIVE,"/room/v1/Room/playUrl",map("cid",""+room,"platform","h5","quality","4","qn",""+quality),false)));}
     JSONObject qr()throws Exception{return data(get(PASSPORT,"/x/passport-login/web/qrcode/generate",map(),false));}
     JSONObject poll(String key)throws Exception{return data(get(PASSPORT,"/x/passport-login/web/qrcode/poll",map("qrcode_key",key),false));}
     void remember(JSONObject video,long cid){try{

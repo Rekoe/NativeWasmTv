@@ -20,3 +20,10 @@ QR encoding:
 Host-provided libraries (not bundled in bl.jar):
   OkHttp 3.12.13, Okio 1.15.0 and IJK Java/native player 0.8.8.
   The host retains their existing distribution and license obligations.
+
+DASH video/audio merge (Android API 16 and later):
+  ExoPlayer core 2.9.6, https://github.com/google/ExoPlayer/tree/r2.9.6
+  Copyright (C) The Android Open Source Project.
+  Apache License, Version 2.0: LICENSE-ExoPlayer.
+  Core only; native channel controls are Java Views, without Exo UI/Activity modules.
+  Its DataSource uses the host's shared OkHttp client.

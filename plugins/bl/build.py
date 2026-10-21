@@ -27,7 +27,7 @@ def dependency(name):
         elif cached:target.write_bytes(cached[0].read_bytes())
         else:
             base='https://maven.aliyun.com/repository/jcenter/' if name=='ijkplayer-java.aar' else 'https://repo.maven.apache.org/maven2/'
-            with urllib.request.urlopen(base+entry['maven'],timeout=60) as r:target.write_bytes(r.read())
+            with urllib.request.urlopen(entry.get('url') or base+entry['maven'],timeout=60) as r:target.write_bytes(r.read())
     if hashlib.sha256(target.read_bytes()).hexdigest()!=entry['sha256']:raise SystemExit('Dependency hash mismatch: '+name)
     return target
 okhttp=dependency('okhttp.jar');okio=dependency('okio.jar');aar=dependency('ijkplayer-java.aar')
@@ -38,28 +38,33 @@ exe='.exe' if os.name=='nt' else ''
 subprocess.run([str(java/('javac'+exe)),'-encoding','UTF-8','-g:none','-source','8','-target','8','-sourcepath',str(source),'-d',str(classes),str(source/'com/google/zxing/qrcode/QRCodeWriter.java')],check=True)
 ijk=out/'ijk-api.jar'
 with zipfile.ZipFile(aar) as z:ijk.write_bytes(z.read('classes.jar'))
+exo=out/'exoplayer.jar'
+with zipfile.ZipFile(dependency('exoplayer-core.aar')) as z:exo.write_bytes(z.read('classes.jar'))
 android=pathlib.Path(args.android14) if args.android14 else dependency('android14.jar')
 if not android.exists():raise SystemExit('Provide --android14 with the Android 4.0 API stub jar')
 api=root/'app/src/main/java/xiao/bu/tv/jar/ChannelPlugin.java'
 json_api=dependency('json.jar');xml_api=dependency('xmlpull.jar')
-classpath=os.pathsep.join(map(str,[android,json_api,xml_api,okhttp,okio,classes,ijk]))
+classpath=os.pathsep.join(map(str,[android,json_api,xml_api,okhttp,okio,classes,ijk,exo]))
 sources=[str(api),*map(str,(here/'src').rglob('*.java'))]
 subprocess.run([str(java/('javac'+exe)),'-encoding','UTF-8','-g:none','-source','8','-target','8','-cp',classpath,'-d',str(classes),*sources],check=True)
 program=out/'program.jar';contract=out/'contract.jar'
 with zipfile.ZipFile(program,'w') as pzip,zipfile.ZipFile(contract,'w') as azip:
     for f in sorted(classes.rglob('*.class')):
         name=f.relative_to(classes).as_posix();(azip if name.startswith('xiao/bu/tv/jar/') else pzip).write(f,name)
+    with zipfile.ZipFile(exo) as z:
+        for name in sorted(z.namelist()):
+            if name.endswith('.class'):pzip.writestr(name,z.read(name))
 dex=out/'dex';dex.mkdir(exist_ok=True)
-subprocess.run([str(java/('java'+exe)),'-cp',str(sdk/'build-tools/30.0.3/lib/d8.jar'),'com.android.tools.r8.D8','--min-api','14','--lib',str(android),'--classpath',str(json_api),'--classpath',str(xml_api),'--classpath',str(contract),'--classpath',str(okhttp),'--classpath',str(okio),'--classpath',str(ijk),'--output',str(dex),str(program)],check=True)
+subprocess.run([str(java/('java'+exe)),'-cp',str(sdk/'build-tools/30.0.3/lib/d8.jar'),'com.android.tools.r8.R8','--min-api','14','--pg-conf',str(here/'shrink.pro'),'--lib',str(sdk/'platforms/android-30/android.jar'),'--lib',str(contract),'--lib',str(okhttp),'--lib',str(okio),'--lib',str(ijk),'--output',str(dex),str(program)],check=True)
 dist=here/'dist';dist.mkdir(exist_ok=True);jar=dist/'bl.jar'
 with zipfile.ZipFile(jar,'w',compression=zipfile.ZIP_DEFLATED) as z:
     def entry(name,data):
         info=zipfile.ZipInfo(name,(1980,1,1,0,0,0));info.compress_type=zipfile.ZIP_DEFLATED;info.external_attr=0o100644<<16;z.writestr(info,data)
     entry('classes.dex',(dex/'classes.dex').read_bytes())
-    entry('channel-plugin.json',json.dumps(dict(api=1,version=1,minSdk=14,entry='xiao.bu.channel.bl.BlPlugin',native=True,hostCapability='NativeHost')))
+    entry('channel-plugin.json',json.dumps(dict(api=1,version=2,minSdk=14,entry='xiao.bu.channel.bl.BlPlugin',native=True,hostCapability='NativeHost')))
     for f in sorted((here/'assets').rglob('*')):
         if f.is_file() and f.suffix!='.webp':entry('assets/'+f.relative_to(here/'assets').as_posix(),f.read_bytes())
-    for name in ['NOTICE','LICENSE-newBV','LICENSE-ZXing']:
+    for name in ['NOTICE','LICENSE-newBV','LICENSE-ZXing','LICENSE-ExoPlayer']:
         if (here/name).exists():entry(name,(here/name).read_bytes())
 sha=hashlib.sha256(jar.read_bytes()).hexdigest();(dist/'bl.sha256').write_text(sha+'\n',encoding='ascii')
 (dist/'example.m3u').write_text('#EXTM3U\n#EXTINF:-1 group-title="视频",BL 哔哩哔哩\nhttps://raw.githubusercontent.com/buhanzhe/NativeWasmTv/master/plugins/bl/dist/bl.jar?sha256='+sha+'\n',encoding='utf-8')
