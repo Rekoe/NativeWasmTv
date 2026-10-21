@@ -22,7 +22,7 @@ https://raw.githubusercontent.com/buhanzhe/NativeWasmTv/master/plugins/bl/dist/e
 | Android 4.0 实测 | 设备未连接，尚未完成真机验证；编译通过不等于全部 ROM、解码器都已经验证 |
 | WebView | 完全不依赖 WebView，没有最低 WebView 版本要求 |
 | API 14–15 播放 | `BlSystemPlayer`，只引用 API 14 的平台 MediaPlayer；视频经共享 OkHttp 的本机代理输入 |
-| API 16+ 播放 | 默认优先 DASH；Exo core 2.9.6 合并分离的 AVC/AAC 音视频，DataSource 使用同一个宿主 OkHttp。MP4/FLV 复用宿主 IJK，可切换系统播放器 |
+| API 16+ 播放 | 默认优先 DASH；Exo core 2.9.6 合并分离的 AVC/AAC 音视频，DataSource 使用同一个宿主 OkHttp。MP4/FLV 复用宿主 IJK，可切换系统播放器；DASH 先尝试音视频备用地址，媒体失败后会话内回退一次到兼容媒体 |
 | ABI | JAR 不包含 `.so`；IJK 播放取决于宿主 APK 与设备 ABI 匹配。平台播放无需 JAR 携带原生库 |
 
 没有直接打包 newBV 的 Compose/Media3 主应用，也没有把 BBLL 的 Activity 搬进 JAR。平台播放适配器特意避免 IJK `AndroidMediaPlayer` 中 API 16 `OnTimedTextListener` 的引用。
@@ -113,7 +113,7 @@ python plugins/bl/build.py --sdk D:/android/sdk --java-home C:/path/to/jdk8
 并用 300ms 的引擎暂停模拟短暂未播放，检查恢复后的弹幕任务和实际绘制时间线。
 报告主线程 16ms 心跳间隔的 P95/最大值；截图编码在采样结束后执行，不把它混入交互数据。
 这些值是短测中的队列响应观察，不是显示帧率或长期性能基准。
-所有轮次通过 `testPreferences=true` 使用独立的 `ntv-bl-instrumentation` 偏好，
+默认轮次通过 `testPreferences=true` 使用独立的 `ntv-bl-instrumentation` 偏好，
 保留正式 BL 登录、历史和设置；结束后恢复宿主上次播放频道的记录。
 
 设备允许覆盖已有包、却拒绝安装单独测试 APK 时，可按用户要求使用原包名与原签名：
@@ -149,6 +149,8 @@ python plugins/bl/tests/run_device.py --serial DEVICE_SERIAL --package xiao.bu.t
 
 设备需可访问电脑局域网的 39626/39627 端口。加 `--real` 使用真实站点 API，`--dash` 测试 DASH，`--system` 强制走 API 14 系统播放器适配器。默认测试 IJK。DASH 测试需在视频旁准备 `video-only.mp4`（无音频）和 `audio-only.m4a`（无视频），例如用 ffmpeg 的 `-an -c:v copy` 和 `-vn -c:a copy` 分离，并加 `-movflags +faststart`。
 
-结果及截图输出到 `output/bl/tests/`。测试覆盖共享客户端身份、触摸/遥控器、解码时间推进、媒体键、画质/连续分 P/备用线路/字幕、默认字幕和按钮显示设置、protobuf 弹幕实际绘制、zlib 直播弹幕、CDN 403 自动换线、后台暂停恢复、Range/HEAD、HLS URI 重写、二维码、历史、逐层返回及退出后的线程和端口关闭。`--smoke` 跳过解码器切换压力场景，只检查基础播放、面板、导航、直播弹幕和退出；不能代替完整回归。真实接口测试只做匿名读取，不操作真实账号。发布验证记录见 [VALIDATION.md](VALIDATION.md)。
+测试服务的 `--dash-fallbacks` 让 DASH 视频/音频主地址返回 403；`--dash-reject-all` 让其所有地址返回 403、保留兼容媒体，用于验收回退。
+
+结果及截图输出到 `output/bl/tests/`。测试覆盖共享客户端身份、触摸/遥控器、解码时间推进、媒体键、画质/连续分 P/备用线路/字幕、默认字幕和按钮显示设置、protobuf 弹幕实际绘制、zlib 直播弹幕、CDN 403 自动换线、后台暂停恢复、Range/HEAD、HLS URI 重写、二维码、历史、逐层返回及退出后的线程和端口关闭。`--smoke` 跳过解码器切换压力场景，只检查基础播放、面板、导航、直播弹幕和退出；不能代替完整回归。默认真实接口测试只做匿名读取。经用户授权的 `--account-audit --real --jar-url HTTPS_JAR` 使用已有正式登录，只允许 GET/HEAD，阻断账号写请求；打开并取消确认弹窗，末尾检查登录及写请求尝试数，并恢复本地设置。报告不会输出账号标识或凭据。`--local-jar PATH` 可通过 ADB 将开发 JAR 放入私有缓存，仍需通过 source 中 SHA-256 和正式加载器检查；不必向旧设备开放电脑端口。账号验收不使用 `testPreferences=true`，且不能与故障注入混用。发布验证记录见 [VALIDATION.md](VALIDATION.md)。
 
 UI 提取可复核：先用 apktool 解码用户 APK（`apktool d -s`），再运行 `python plugins/bl/extract_ui.py DECODED_DIR --sharp SHARP_MODULE`；只提取资源，没有导入 APK 的 DEX。

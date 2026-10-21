@@ -54,9 +54,12 @@ final class BlApi {
     }
     Response execute(Request request)throws IOException{return execute(request,null);}
     Response execute(Request request,final Set<Call> owner)throws IOException{
+        return execute(request,owner,null);
+    }
+    Response execute(Request request,final Set<Call> owner,java.util.concurrent.atomic.AtomicBoolean cancelled)throws IOException{
         if(closed)throw new IOException("频道已关闭");final Call call=client.newCall(request);pending.add(call);if(owner!=null)owner.add(call);
         try{
-            if(closed){call.cancel();throw new IOException("频道已关闭");}Response response=call.execute();final ResponseBody body=response.body();
+            if(closed||cancelled!=null&&cancelled.get()){call.cancel();throw new IOException("请求已取消");}Response response=call.execute();final ResponseBody body=response.body();
             if(!response.isSuccessful()){BlDiagnostics.Failure failure=BlDiagnostics.response(response);transportFailures.put(request.url().toString(),failure);diagnostics.record("HTTP 响应",failure,"");}else transportFailures.remove(request.url().toString());
             if(body==null){pending.remove(call);if(owner!=null)owner.remove(call);return response;}
             final okio.BufferedSource source=okio.Okio.buffer(new okio.ForwardingSource(body.source()){
@@ -143,7 +146,7 @@ final class BlApi {
     JSONArray later()throws Exception{requireLogin();return array(data(get("/x/v2/history/toview")),"list");}
     JSONArray followed(int page)throws Exception{requireLogin();return array(data(get("/x/relation/followings","vmid",""+uid(),"pn",""+page,"ps","24","order","desc")),"list");}
     JSONArray uploads(long mid,int page)throws Exception{return array(data(get("/x/space/wbi/arc/search","mid",""+mid,"pn",""+page,"ps","24","order","pubdate")).optJSONObject("list"),"vlist");}
-    JSONArray region(int rid,int page)throws Exception{JSONObject d=data(get("/x/web-interface/region/feed/rcmd","from_region",""+rid,"display_id",""+page,"request_cnt","24","device","web","plat","30"));JSONArray list=array(d,"archives");return list.length()>0?list:array(d,"items");}
+    JSONArray region(int rid,int page)throws Exception{JSONObject d=data(get("/x/web-interface/region/feed/rcmd","from_region",""+rid,"display_id",""+page,"request_cnt","15","device","web","plat","30"));JSONArray list=array(d,"archives");return list.length()>0?list:array(d,"items");}
     JSONArray seasons(int page)throws Exception{return array(data(get("/pgc/season/index/result","season_type","1","type","1","page",""+page,"pagesize","24","order","3","sort","0")),"list");}
     JSONObject season(long id)throws Exception{return data(get("/pgc/view/web/season","season_id",""+id));}
     JSONObject episodePlay(long episode,long cid,int quality)throws Exception{return data(get("/pgc/player/web/playurl","ep_id",""+episode,"cid",""+cid,"qn",""+quality,"fnval","1","fourk","0"));}

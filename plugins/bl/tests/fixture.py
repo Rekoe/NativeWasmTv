@@ -1,5 +1,5 @@
 import http.server,threading,ssl,json,urllib.parse,pathlib,socket,re,time,argparse,struct,zlib,base64,hashlib
-args=argparse.ArgumentParser();args.add_argument('--cert',required=True,type=pathlib.Path);args.add_argument('--key',required=True,type=pathlib.Path);args.add_argument('--video',required=True,type=pathlib.Path);args.add_argument('--host',help='Advertised host; 127.0.0.1 works with adb reverse');options=args.parse_args()
+args=argparse.ArgumentParser();args.add_argument('--cert',required=True,type=pathlib.Path);args.add_argument('--key',required=True,type=pathlib.Path);args.add_argument('--video',required=True,type=pathlib.Path);args.add_argument('--host',help='Advertised host; 127.0.0.1 works with adb reverse');args.add_argument('--dash-fallbacks',action='store_true',help='Reject both DASH primary streams to verify supplied video/audio backups');args.add_argument("--dash-reject-all",action="store_true",help="Reject all DASH mirrors; progressive media remains available");options=args.parse_args()
 ROOT=pathlib.Path(__file__).resolve().parents[3]
 work=ROOT/'.codex-tmp/bl';work.mkdir(parents=True,exist_ok=True)
 s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM);s.connect(('1.1.1.1',80));host=s.getsockname()[0];s.close()
@@ -97,7 +97,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
   elif p.path in ['/x/player/playurl','/x/player/wbi/playurl','/pgc/player/web/playurl']:
    quality=int(q.get('qn',['32'])[0]);data={'quality':quality,'format':'mp4','accept_quality':[16,32,64],'durl':[{'url':base+'/video.mp4?cid='+q.get('cid',['0'])[0],'backup_url':[base+'/video.mp4?backup=1'],'length':40000,'size':(options.video).stat().st_size}]}
    if q.get('fnval',['1'])[0]=='16':
-    data.pop('durl');data['dash']={'duration':40,'video':[{'id':quality,'baseUrl':base+'/video-only.mp4?cid='+q.get('cid',['0'])[0],'backupUrl':[base+'/video-only.mp4?backup=1'],'codecs':'avc1.42c01e','codecid':7,'bandwidth':600000}],'audio':[{'id':30216,'baseUrl':base+'/audio-only.m4a','codecs':'mp4a.40.2','bandwidth':64000}]}
+    rejected='&fail=1' if options.dash_fallbacks or options.dash_reject_all else ''
+    data.pop('durl');data['dash']={'duration':40,'video':[{'id':quality,'baseUrl':base+'/video-only.mp4?cid='+q.get('cid',['0'])[0]+rejected,'backupUrl':[base+'/video-only.mp4?backup=1'+('&fail=1' if options.dash_reject_all else '')],'codecs':'avc1.42c01e','codecid':7,'bandwidth':600000}],'audio':[{'id':30216,'baseUrl':base+'/audio-only.m4a?primary=1'+rejected,'backup_url':[base+'/audio-only.m4a?backup=1'+('&fail=1' if options.dash_reject_all else '')],'codecs':'mp4a.40.2','bandwidth':64000}]}
   elif p.path=='/x/v2/dm/web/view':return self.response(200,field(34,field(8,10000)+field(16,4)),'application/octet-stream')
   elif p.path=='/x/v2/dm/wbi/web/seg.so':return self.response(200,danmaku_segment(int(q['segment_index'][0])),'application/octet-stream')
   elif p.path=='/x/v1/dm/list.so':return self.response(200,b'<i><d p="2,1,25,16777215">Native View danmaku</d><d p="5,1,25,123456">API14 + OkHttp</d></i>','text/xml')

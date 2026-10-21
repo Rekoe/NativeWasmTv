@@ -15,9 +15,13 @@ p.add_argument('--skip-host-install',action='store_true',help='Keep the installe
 p.add_argument('--embedded-runner',action='store_true',help='Runner is temporarily embedded in the explicitly selected host APK')
 p.add_argument('--errors',action='store_true',help='Inject HTTP/business/JSON/media faults and exercise the diagnostics UI')
 p.add_argument('--interactions',action='store_true',help='Exercise real player taps, overlays, remote focus and transient playback recovery')
+p.add_argument('--account-audit',action='store_true',help='Read-only audit using the existing production login; never clears production preferences')
+p.add_argument('--local-jar',type=pathlib.Path,help='Seed the hash-checked plugin cache from a local development JAR through instrumentation')
+p.add_argument('--account-probe',action='store_true',help='Limit the read-only account audit to endpoint parameter diagnosis')
 p.add_argument('--soak-seconds',type=int,default=0,help='Additional initial playback observation (fixture video is 40 seconds)')
 p.add_argument('--run-label',default='',help='Optional output suffix to preserve separate regression rounds')
 a=p.parse_args();root=pathlib.Path(__file__).resolve().parents[3];adb=[a.adb,'-s',a.serial]
+if a.account_audit and (not a.real or not a.jar_url or a.errors):p.error('--account-audit requires --real --jar-url and cannot inject faults')
 def run(*args,**kw):return subprocess.run(adb+list(args),check=True,**kw)
 if not a.skip_install:
     for apk in ([a.host_apk] if a.embedded_runner else [a.test_apk] if a.skip_host_install else [a.host_apk,a.test_apk]):run('install','-r',apk)
@@ -25,11 +29,15 @@ run('shell','input','keyevent','224')
 subprocess.run(adb+['shell','wm','dismiss-keyguard'],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
 s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM);s.connect(('1.1.1.1',80));host=s.getsockname()[0];s.close()
 if a.fixture_host:host=a.fixture_host
-sha=(root/'plugins/bl/dist/bl.sha256').read_text().strip();params={'sha256':sha,'testPreferences':'true'}
+sha=(root/'plugins/bl/dist/bl.sha256').read_text().strip();params={'sha256':sha}
+if not a.account_audit:params['testPreferences']='true'
 if not a.real:
     for key in ['apiOrigin','passportOrigin','liveOrigin']:params[key]='http://'+host+':39626'
 source=(a.jar_url or 'https://'+host+':39627/bl.jar')+'?'+urllib.parse.urlencode(params)
 command='am instrument -w -e source '+shlex.quote(source)
+if a.local_jar:
+    run('push',str(a.local_jar),'/data/local/tmp/ntv-bl-audit.jar')
+    command+=' -e localJar /data/local/tmp/ntv-bl-audit.jar'
 if a.cert:
     run('push',str(a.cert),'/data/local/tmp/ntv-bl-test-cert.pem')
     command+=' -e cert /data/local/tmp/ntv-bl-test-cert.pem -e fixtureHost '+shlex.quote(host)
@@ -39,6 +47,8 @@ if a.dash:command+=' -e dash true'
 if a.smoke:command+=' -e smoke true'
 if a.errors:command+=' -e errors true'
 if a.interactions:command+=' -e interactions true'
+if a.account_audit:command+=' -e accountAudit true'
+if a.account_probe:command+=' -e accountProbe true'
 if a.soak_seconds:command+=' -e soakSeconds '+str(a.soak_seconds)
 command+=' '+a.package+('' if a.embedded_runner else '.test')+'/xiao.bu.tv.BlPluginInstrumentation'
 out=root/'output/bl/tests'/(re.sub(r'[^a-zA-Z0-9_.-]','_',a.serial)+('-real' if a.real else '-fixture')+('-system' if a.system else '-dash' if a.dash else '-ijk')+('-smoke' if a.smoke else ''));out.mkdir(parents=True,exist_ok=True)
@@ -50,6 +60,7 @@ lines=[]
 def collect():
     for line in process.stdout:
         lines.append(line)
+        if a.account_audit:print(line,end='',flush=True)
         if 'BL_PLAYING engine=' in line:
             try:
                 remote='/sdcard/Android/data/'+a.package+'/files/bl-playing.png'
@@ -67,7 +78,7 @@ def collect():
 reader=threading.Thread(target=collect,daemon=True);reader.start()
 time.sleep(2);run('shell','am','start','-W','-n',a.package+'/xiao.bu.tv.MainActivity')
 subprocess.run(adb+['shell','wm','dismiss-keyguard'],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
-try:process.wait(timeout=240+max(0,a.soak_seconds))
+try:process.wait(timeout=(1200 if a.account_audit else 240)+max(0,a.soak_seconds))
 except subprocess.TimeoutExpired:process.kill();raise
 reader.join(25);text=''.join(lines);print(text)
 (out/'result.txt').write_text(text,encoding='utf-8')
@@ -76,6 +87,8 @@ pid=re.search(r'BL_TEST_PID=(\d+)',text)
 if pid:logs='\n'.join(line for line in logs.splitlines() if re.match(r'^\d\d-\d\d\s+\S+\s+'+pid.group(1)+r'\s+',line))+'\n'
 else:logs='No target PID was reported; unrelated process logs were omitted.\n'
 (out/'logcat.txt').write_text(logs,encoding='utf-8')
-images=(['bl-interactions.png'] if a.interactions else ['bl-http-error.png','bl-media-error.png'] if a.errors else ['bl-home.png','bl-search.png','bl-history.png','bl-login.png','bl-settings.png','bl-live.png']+([] if a.real or a.smoke else ['bl-episodes.png','bl-danmaku-settings.png','bl-controls.png'])) if 'PASS:' in text else ['bl-error.png']
+if a.account_audit and not a.account_probe:subprocess.run(adb+['pull','/sdcard/Android/data/'+a.package+'/files/bl-account-audit.json',str(out/'account-audit.json')])
+images=(['bl-account-player.png','bl-account-settings.png'] if a.account_audit else ['bl-interactions.png'] if a.interactions else ['bl-http-error.png','bl-media-error.png'] if a.errors else ['bl-home.png','bl-search.png','bl-history.png','bl-login.png','bl-settings.png','bl-live.png']+([] if a.real or a.smoke else ['bl-episodes.png','bl-danmaku-settings.png','bl-controls.png'])) if 'PASS:' in text or a.account_audit else ['bl-error.png']
+if a.account_probe:images=[]
 for name in images:subprocess.run(adb+['pull','/sdcard/Android/data/'+a.package+'/files/'+name,str(out/name)])
 raise SystemExit(0 if 'PASS:' in text else 1)
