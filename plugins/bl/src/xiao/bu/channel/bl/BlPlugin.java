@@ -34,14 +34,16 @@ public final class BlPlugin implements ChannelPlugin,ChannelPlugin.NativePage {
     private final Deque<Route> history=new ArrayDeque<>();private Route route;
     private final Handler main=new Handler(Looper.getMainLooper());
     private final ThreadPoolExecutor jobs=new ThreadPoolExecutor(2,2,20,TimeUnit.SECONDS,new ArrayBlockingQueue<Runnable>(16),new ThreadPoolExecutor.DiscardOldestPolicy());
-    private int generation,modalGeneration;private boolean closed,loading,active=true;private String selectedTab="home";
+    private int generation,modalGeneration;private boolean closed,loading,statusError,active=true;private String selectedTab="home";
     private BlPlayer player;private BlDanmakuFeed dmFeed;private long dmCid;private final List<BlPlayer> retired=new ArrayList<>();private JSONObject video,playData;private long cid,episode;private int playbackGeneration;private int partIndex;private View modalFocus;
-    private final Runnable clock=new Runnable(){public void run(){if(!closed&&active){if(status!=null&&!loading)status.setText(android.text.format.DateFormat.format("HH:mm",System.currentTimeMillis()));main.postDelayed(this,60000);}}};
+    private final Runnable clock=new Runnable(){public void run(){if(!closed&&active){if(status!=null&&!loading&&!statusError)status.setText(android.text.format.DateFormat.format("HH:mm",System.currentTimeMillis()));main.postDelayed(this,60000);}}};
     /** Build the entire native channel inside one root View using the host transport. */
     public View create(Context context,ClassLoader resources,JSONObject config,Host host)throws Exception{
         if(!(host instanceof ChannelPlugin.NativeHost))throw new java.io.IOException("BL 需要更新支持原生插件的宿主 APK");
         Object client=((ChannelPlugin.NativeHost)host).httpClient();if(!(client instanceof OkHttpClient))throw new java.io.IOException("宿主共享 OkHttp 不可用");
-        this.context=context;this.host=host;ui=new BlUi(context);api=new BlApi((OkHttpClient)client,context.getSharedPreferences("ntv-bl",Context.MODE_PRIVATE),config);images=new BlImages(api,resources);proxy=new BlMediaProxy(api);
+        // A fixed, separate namespace lets device instrumentation leave real accounts/history intact.
+        String preferences=config.optBoolean("testPreferences",false)?"ntv-bl-instrumentation":"ntv-bl";
+        this.context=context;this.host=host;ui=new BlUi(context);api=new BlApi((OkHttpClient)client,context.getSharedPreferences(preferences,Context.MODE_PRIVATE),config);images=new BlImages(api,resources);proxy=new BlMediaProxy(api);
         root=new Root(context);root.setBackgroundColor(BlUi.BG);root.setContentDescription("BL频道");
         ImageView background=new ImageView(context);background.setScaleType(ImageView.ScaleType.CENTER_CROP);background.setImageBitmap(images.asset("background.png"));background.setAlpha(0.20f);root.addView(background,new FrameLayout.LayoutParams(-1,-1));
         sidebar=ui.vertical();sidebar.setPadding(ui.px(10),ui.px(14),ui.px(10),ui.px(12));sidebar.setBackgroundColor(0x77303030);
@@ -63,12 +65,12 @@ public final class BlPlugin implements ChannelPlugin,ChannelPlugin.NativePage {
     }
     private void saveRoute(){if(route!=null&&grid!=null){route.selection=Math.max(0,grid.getSelectedItemPosition());route.scroll=grid.getFirstVisiblePosition();}}
     private void render(){
-        generation++;loading=false;main.removeCallbacks(clock);content.removeAllViews();grid=null;adapter=null;items.clear();
+        generation++;loading=false;statusError=false;main.removeCallbacks(clock);content.removeAllViews();grid=null;adapter=null;items.clear();
         for(Map.Entry<String,Button> t:tabs.entrySet())t.getValue().setSelected(t.getKey().equals(selectedTab));
         boolean full=route.kind.equals("player");sidebar.setVisibility(full?View.GONE:View.VISIBLE);FrameLayout.LayoutParams cp=(FrameLayout.LayoutParams)content.getLayoutParams();cp.leftMargin=full?0:ui.px(108);content.setLayoutParams(cp);
         if(full){renderPlayer();return;}
         final LinearLayout page=ui.vertical();page.setPadding(ui.px(20),ui.px(18),ui.px(20),ui.px(12));content.addView(page,new FrameLayout.LayoutParams(-1,-1));
-        LinearLayout header=ui.horizontal();header.addView(ui.title(route.title),new LinearLayout.LayoutParams(0,ui.px(48),1));status=ui.text("",15,BlUi.SUB);header.addView(status);ui.gap(header,18);Button refresh=ui.button("刷新");refresh.setOnClickListener(new View.OnClickListener(){public void onClick(View v){route.cached=new JSONArray();route.page=1;route.more=true;render();}});header.addView(refresh);page.addView(header);
+        LinearLayout header=ui.horizontal();header.addView(ui.title(route.title),new LinearLayout.LayoutParams(0,ui.px(48),1));status=ui.text("",15,BlUi.SUB);status.setMaxWidth(ui.px(430));status.setMaxLines(2);status.setEllipsize(android.text.TextUtils.TruncateAt.END);header.addView(status);ui.gap(header,18);Button diagnostics=ui.button("错误详情");diagnostics.setOnClickListener(new View.OnClickListener(){public void onClick(View v){showDiagnostics();}});header.addView(diagnostics);ui.gap(header,8);Button refresh=ui.button("刷新");refresh.setOnClickListener(new View.OnClickListener(){public void onClick(View v){route.cached=new JSONArray();route.page=1;route.more=true;render();}});header.addView(refresh);page.addView(header);
         main.post(clock);
         if(route.kind.equals("search")){renderSearch(page);return;}
         if(route.kind.equals("mine")){renderMine(page);return;}
@@ -141,6 +143,7 @@ public final class BlPlugin implements ChannelPlugin,ChannelPlugin.NativePage {
     }
     private void renderSettings(LinearLayout page){
         List<Option> list=new ArrayList<>();final boolean hardware=api.prefs.getBoolean("hardware",true),auto=api.prefs.getBoolean("autoplay",true);
+        list.add(new Option("错误详情与诊断",new Runnable(){public void run(){showDiagnostics();}}));
         list.add(new Option("硬件解码："+(hardware?"开":"关")+"（Android 4.0 使用系统播放器）",new Runnable(){public void run(){api.prefs.edit().putBoolean("hardware",!hardware).apply();render();}}));
         list.add(new Option("自动播放下一分 P："+(auto?"开":"关"),new Runnable(){public void run(){api.prefs.edit().putBoolean("autoplay",!auto).apply();render();}}));
         list.add(new Option("DASH 音视频分离播放："+(api.prefs.getBoolean("prefer_dash",true)?"开":"关")+"（Android 4.1+）",new Runnable(){public void run(){api.prefs.edit().putBoolean("prefer_dash",!api.prefs.getBoolean("prefer_dash",true)).apply();render();}}));
@@ -179,7 +182,7 @@ public final class BlPlugin implements ChannelPlugin,ChannelPlugin.NativePage {
         video=route.data;cid=route.playbackCid;episode=route.playbackEpisode;partIndex=route.playbackPart;final boolean live=video.optBoolean("bl_live");if(live)cid=Long.parseLong(route.arg);
         player=new BlPlayer(ui,proxy,api,images,route.title,api.prefs.getBoolean("hardware",true),api.prefs.getBoolean("systemPlayer",false),new BlPlayer.Actions(){
             public void settings(){playerSettings();}public void episodes(){episodeOptions(video,episode);}public void comments(){BlPlugin.this.comments(video.optLong("aid"),1);}public void subtitle(){subtitles();}
-            public void more(){playerMore();}public void related(){playerRelated();}public void up(){playerUp();}public void step(int delta){stepPart(delta);}public void order(){playOrder();}public void exit(){leavePlayer();}public void position(long at){if(dmFeed!=null)dmFeed.update(at);}
+            public void more(){playerMore();}public void diagnostics(){showDiagnostics();}public void related(){playerRelated();}public void up(){playerUp();}public void step(int delta){stepPart(delta);}public void order(){playOrder();}public void exit(){leavePlayer();}public void position(long at){if(dmFeed!=null)dmFeed.update(at);}
             public void complete(){String order=api.prefs.getString("play_order","顺序播放");if(!live&&order.equals("单集循环")){loadPlayback(0);return;}if(!live&&api.prefs.getBoolean("autoplay",true)&&(!order.equals("播完停止"))){if(stepPart(order.equals("倒序播放")?-1:1))return;}if(!live&&api.prefs.getBoolean("exit_after_play",false)){leavePlayer();return;}message("播放结束",false);}
             public void failure(String error){if(live&&!liveLegacy){liveLegacy=true;loadPlayback(0);message("正在切换兼容直播线路",false);}else message(error,true);}
         });content.addView(player,new FrameLayout.LayoutParams(-1,-1));loadPlayback(live?0:api.prefs.getLong("position:"+video.optString("bvid")+":"+cid,0));
@@ -187,7 +190,7 @@ public final class BlPlugin implements ChannelPlugin,ChannelPlugin.NativePage {
     }
     private void loadPlayback(final long at){route.playbackCid=cid;route.playbackEpisode=episode;route.playbackPart=partIndex;final int request=++playbackGeneration;final boolean live=video.optBoolean("bl_live");final String bvid=video.optString("bvid");final long selectedCid=cid,selectedEpisode=episode;final int token=generation;final int quality=api.prefs.getInt("quality",64);
         final boolean dash=Build.VERSION.SDK_INT>=16&&api.prefs.getBoolean("prefer_dash",true)&&!api.prefs.getBoolean("systemPlayer",false);
-        submit(new Job(){public Object run()throws Exception{if(live&&liveLegacy)return api.liveLegacy(selectedCid,api.prefs.getInt("live_quality",0));if(live)return api.livePlay(selectedCid,api.prefs.getInt("live_quality",0),Build.VERSION.SDK_INT<16||api.prefs.getBoolean("systemPlayer",false));if(dash)try{JSONObject data=selectedEpisode>0?api.episodeDash(selectedEpisode,selectedCid,quality):api.playDash(bvid,selectedCid,quality);if(data.optJSONObject("dash")!=null||BlApi.array(data,"durl").length()>0)return data;}catch(Exception ignored){}return selectedEpisode>0?api.episodePlay(selectedEpisode,selectedCid,quality):api.play(bvid,selectedCid,quality);}},token,new Result(){public void show(Object value)throws Exception{
+        submit(new Job(){public Object run()throws Exception{if(live&&liveLegacy)return api.liveLegacy(selectedCid,api.prefs.getInt("live_quality",0));if(live)return api.livePlay(selectedCid,api.prefs.getInt("live_quality",0),Build.VERSION.SDK_INT<16||api.prefs.getBoolean("systemPlayer",false));if(dash)try{JSONObject data=selectedEpisode>0?api.episodeDash(selectedEpisode,selectedCid,quality):api.playDash(bvid,selectedCid,quality);if(data.optJSONObject("dash")!=null||BlApi.array(data,"durl").length()>0)return data;}catch(Exception error){api.diagnostics.record("DASH 接口回退 MP4/FLV",error,"BV="+bvid+"; cid="+selectedCid+"; 请求画质="+quality);}return selectedEpisode>0?api.episodePlay(selectedEpisode,selectedCid,quality):api.play(bvid,selectedCid,quality);}},token,new Result(){public void show(Object value)throws Exception{
             if(request!=playbackGeneration||selectedCid!=cid||player==null)return;playData=(JSONObject)value;JSONArray list=BlStreams.select(playData,quality,api.prefs.getString("video_codec","AVC"),api.prefs.getInt("audio_track",0));if(list.length()==0)throw new java.io.IOException("接口未返回可播放媒体，请登录或选择较低画质");player.play(list,at);JSONObject part=BlApi.array(video,"pages").optJSONObject(partIndex);String info=(part==null?"":("P"+(partIndex+1)+" · "+part.optString("part"))+"  ")+qualityName(list.optJSONObject(0).optInt("bl_quality",playData.optInt("quality",quality)))+" · "+(list.optJSONObject(0).has("bl_audio")?"DASH":"MP4/FLV");if(live)info="直播 · "+BlLiveStreams.quality(playData,playData.optInt("quality"));player.title(route.title,info);
         }});
         if(!live&&player!=null&&dmCid!=cid){if(dmFeed!=null)dmFeed.close();dmCid=cid;dmFeed=new BlDanmakuFeed(api,player.danmaku);dmFeed.reset(cid,video.optLong("aid"));player.setSubtitle(new JSONArray());if(api.prefs.getBoolean("subtitle_default",false))defaultSubtitle();api.remember(video,cid);}
@@ -206,7 +209,7 @@ public final class BlPlugin implements ChannelPlugin,ChannelPlugin.NativePage {
         rows.add(new Option("字幕",new Runnable(){public void run(){subtitles();}}));rows.add(new Option("字幕字号\n"+api.prefs.getInt("subtitle_size",27),new Runnable(){public void run(){integerChoices("字幕字号","subtitle_size",new int[]{20,24,27,32,36});}}));
         rows.add(new Option("底部常驻进度条\n"+(api.prefs.getBoolean("bottom_progress",true)?"开":"关"),new Runnable(){public void run(){api.prefs.edit().putBoolean("bottom_progress",!api.prefs.getBoolean("bottom_progress",true)).apply();if(player!=null)player.refreshSettings();}}));
         rows.add(new Option("显示视频调试信息\n"+(api.prefs.getBoolean("player_debug",false)?"开":"关"),new Runnable(){public void run(){api.prefs.edit().putBoolean("player_debug",!api.prefs.getBoolean("player_debug",false)).apply();}}));
-        rows.add(new Option("控制栏与播放偏好",new Runnable(){public void run(){playerPreferences();}}));options("播放设置",rows);
+        rows.add(new Option("控制栏与播放偏好",new Runnable(){public void run(){playerPreferences();}}));rows.add(new Option("错误详情",new Runnable(){public void run(){showDiagnostics();}}));options("播放设置",rows);
     }
     private void playerPreferences(){List<Option> rows=new ArrayList<>();for(final String[] item:new String[][]{{"show_next_previous","显示上下集切换按钮"},{"show_re_ff","显示快进快退按钮"},{"show_dm_switch","显示弹幕开关按钮"},{"subtitle_default","默认启用字幕"},{"exit_after_play","都播完后退出播放器"}}){final boolean fallback=item[0].startsWith("show_");rows.add(new Option(item[1]+"\n"+(api.prefs.getBoolean(item[0],fallback)?"开":"关"),new Runnable(){public void run(){boolean value=!api.prefs.getBoolean(item[0],fallback);api.prefs.edit().putBoolean(item[0],value).apply();if(player!=null){player.refreshSettings();if(item[0].equals("subtitle_default")){if(value)defaultSubtitle();else player.setSubtitle(new JSONArray());}}}}));}options("控制栏与播放偏好",rows);}
     private void defaultSubtitle(){if(video==null||video.optBoolean("bl_live"))return;final long selectedCid=cid;final String bvid=video.optString("bvid");final int token=generation;submit(new Job(){public Object run()throws Exception{JSONArray list=api.subtitles(bvid,selectedCid);if(list.length()==0)return new JSONArray();JSONObject chosen=list.optJSONObject(0);for(int i=0;i<list.length();i++){JSONObject s=list.optJSONObject(i);if(s!=null&&s.optString("lan").startsWith("zh")){chosen=s;break;}}if(chosen==null)return new JSONArray();String url=chosen.optString("subtitle_url");if(url.startsWith("//"))url="https:"+url;return new JSONObject(new String(api.bytes(url,2*1024*1024),"UTF-8")).optJSONArray("body");}},token,new Result(){public void show(Object value){if(player!=null&&selectedCid==cid&&api.prefs.getBoolean("subtitle_default",false))player.setSubtitle(value instanceof JSONArray?(JSONArray)value:new JSONArray());}},false);}
@@ -260,9 +263,41 @@ public final class BlPlugin implements ChannelPlugin,ChannelPlugin.NativePage {
     private void showPanel(Panel value){hideModal();panel=value;modalGeneration++;modalFocus=root.findFocus();modal=new FrameLayout(context);modal.setBackgroundColor(player==null?0xcc101010:0x66101010);LinearLayout card=ui.vertical();card.setPadding(ui.px(20),ui.px(20),ui.px(20),ui.px(16));card.setBackgroundDrawable(ui.fill(0xf5262626,player==null||value.title.equals("选集")?10:0));TextView title=ui.title(value.title);title.setMaxLines(2);card.addView(title);ListView list=optionList(value.rows);card.addView(list,new LinearLayout.LayoutParams(-1,0,1));Button back=ui.button("返回");card.addView(back);back.setOnClickListener(new View.OnClickListener(){public void onClick(View v){backPanel();}});modal.addView(card,player!=null&&!value.title.equals("选集")?ui.frame(440,-1,Gravity.RIGHT):ui.frame(player!=null?680:860,player!=null?410:500,Gravity.CENTER));root.addView(modal,new FrameLayout.LayoutParams(-1,-1));list.requestFocusFromTouch();list.setSelection(value.selection);}
     private void backPanel(){Panel parent=panel==null?null:panel.parent;if(parent==null)hideModal();else showPanel(parent);}
     private void hideModal(){panel=null;modalGeneration++;if(modal!=null){root.removeView(modal);modal=null;if(modalFocus!=null)modalFocus.requestFocus();modalFocus=null;}}
-    private void message(String text,boolean error){if(status!=null){status.setText(text);status.setTextColor(error?0xffffb0b0:BlUi.SUB);}if(error||player!=null)Toast.makeText(context,text,Toast.LENGTH_LONG).show();}
+    private String diagnosticContext(){return "页面="+(route==null?"启动":route.kind)+"; 登录="+api.signedIn()+(video==null?"":"; BV="+video.optString("bvid")+"; cid="+cid+"; P="+(partIndex+1))+"; 请求画质="+api.prefs.getInt("quality",64);}
+    private void reportFailure(String stage,Throwable error,boolean visible){BlDiagnostics.Entry entry=api.diagnostics.record(stage,error,diagnosticContext());if(visible){if(player!=null)player.requestFailure(entry.summary);message(entry.summary+" · 查看错误详情",true);}}
+    private void showDiagnostics(){
+        List<BlDiagnostics.Entry> entries=api.diagnostics.snapshot();StringBuilder text=new StringBuilder();if(entries.isEmpty())text.append("暂无错误记录。\nBL v").append(BlDiagnostics.VERSION).append(" · Android ").append(Build.VERSION.RELEASE).append(" / API ").append(Build.VERSION.SDK_INT).append('\n').append(diagnosticContext());
+        for(BlDiagnostics.Entry entry:entries){if(text.length()>48000)break;if(text.length()>0)text.append("\n\n────────────────\n\n");text.append(entry.details);}final String details=text.toString();
+        Panel parent=openingPanel;hideModal();panel=new Panel("错误详情",new ArrayList<Option>(),parent);modalGeneration++;modalFocus=root.findFocus();modal=new FrameLayout(context);modal.setBackgroundColor(0xcc101010);
+        LinearLayout card=ui.vertical();card.setPadding(ui.px(22),ui.px(18),ui.px(22),ui.px(16));card.setBackgroundDrawable(ui.fill(0xff262626,10));card.addView(ui.title("错误详情 · 最近 "+entries.size()+" 条"));
+        TextView body=ui.text(details,17,BlUi.TEXT);body.setGravity(Gravity.TOP|Gravity.LEFT);body.setPadding(ui.px(6),ui.px(12),ui.px(6),ui.px(12));ScrollView scroll=ui.scroll(body);scroll.setContentDescription("错误详情内容");scroll.setId(0x424c10);scroll.setFocusable(true);scroll.setFocusableInTouchMode(true);scroll.setNextFocusDownId(0x424c11);card.addView(scroll,new LinearLayout.LayoutParams(-1,0,1));
+        LinearLayout buttons=ui.horizontal();Button copy=ui.button("复制详情");copy.setId(0x424c11);copy.setNextFocusUpId(0x424c10);copy.setNextFocusRightId(0x424c12);buttons.addView(copy,new LinearLayout.LayoutParams(0,-2,1));ui.gap(buttons,12);Button back=ui.button("返回");back.setId(0x424c12);back.setNextFocusUpId(0x424c10);back.setNextFocusLeftId(0x424c11);buttons.addView(back,new LinearLayout.LayoutParams(0,-2,1));card.addView(buttons);
+        copy.setOnClickListener(new View.OnClickListener(){public void onClick(View v){android.content.ClipboardManager clipboard=(android.content.ClipboardManager)context.getSystemService(Context.CLIPBOARD_SERVICE);if(clipboard!=null){clipboard.setPrimaryClip(android.content.ClipData.newPlainText("BL 错误详情",details));Toast.makeText(context,"已复制错误详情",Toast.LENGTH_SHORT).show();}}});back.setOnClickListener(new View.OnClickListener(){public void onClick(View v){backPanel();}});
+        modal.addView(card,ui.frame(1060,600,Gravity.CENTER));root.addView(modal,new FrameLayout.LayoutParams(-1,-1));copy.requestFocusFromTouch();
+    }
+    private void message(String text,boolean error){statusError=error;String safe=BlDiagnostics.clean(text);if(error&&!safe.contains("[BL-"))safe=api.diagnostics.record("界面提示",new java.io.IOException(safe),diagnosticContext()).summary;if(status!=null){status.setText(safe);status.setTextColor(error?0xffffb0b0:BlUi.SUB);}if(error||player!=null)Toast.makeText(context,safe,Toast.LENGTH_LONG).show();}
     private void submit(final Job job,final int token,final Result result){submit(job,token,result,true);}
-    private void submit(final Job job,final int token,final Result result,final boolean report){if(closed)return;jobs.execute(new Runnable(){public void run(){if(closed||token!=generation)return;try{final Object value=job.run();main.post(new Runnable(){public void run(){if(closed||token!=generation)return;try{result.show(value);}catch(Exception e){loading=false;if(report)message(e.getMessage()==null?"内容暂不可用":e.getMessage(),true);}}});}catch(final Exception error){main.post(new Runnable(){public void run(){if(closed||token!=generation)return;loading=false;if(report){message(error.getMessage()==null?"网络请求失败，请刷新重试":error.getMessage(),true);if(error instanceof BlApi.ApiException&&((BlApi.ApiException)error).code==-101){List<Option> values=new ArrayList<>();values.add(new Option("扫码登录",new Runnable(){public void run(){navigate(new Route("login","扫码登录",""),true);}}));options("此功能需要登录",values);}}}});}}});}
+    private void submit(final Job job,final int token,final Result result,final boolean report){
+        if(closed)return;
+        jobs.execute(new Runnable(){public void run(){
+            if(closed||token!=generation)return;
+            try{
+                final Object value=job.run();
+                main.post(new Runnable(){public void run(){
+                    if(closed||token!=generation)return;
+                    try{result.show(value);}catch(Exception e){loading=false;reportFailure("内容处理",e,report);}catch(LinkageError e){loading=false;reportFailure("宿主接口不兼容",e,report);}
+                }});
+            }catch(final Exception error){
+                main.post(new Runnable(){public void run(){
+                    if(closed||token!=generation)return;
+                    loading=false;reportFailure("页面请求",error,report);
+                    if(report&&error instanceof BlApi.ApiException&&((BlApi.ApiException)error).code==-101){
+                        List<Option> values=new ArrayList<>();values.add(new Option("扫码登录",new Runnable(){public void run(){navigate(new Route("login","扫码登录",""),true);}}));options("此功能需要登录",values);
+                    }
+                }});
+            }catch(final LinkageError error){main.post(new Runnable(){public void run(){if(closed||token!=generation)return;loading=false;reportFailure("宿主接口不兼容",error,report);}});}
+        }});
+    }
     private void savePlaybackPosition(){if(player!=null&&video!=null&&!video.optBoolean("bl_live"))api.savePosition(video.optString("bvid"),cid,player.position());}
     private void closePlayer(){playbackGeneration++;if(liveDanmaku!=null){liveDanmaku.close();liveDanmaku=null;}if(dmFeed!=null){dmFeed.close();dmFeed=null;}dmCid=0;if(player!=null){savePlaybackPosition();player.close();retired.add(player);player=null;for(Iterator<BlPlayer> i=retired.iterator();i.hasNext();)try{if(i.next().awaitRelease(0))i.remove();}catch(InterruptedException e){Thread.currentThread().interrupt();}}}
     /** Back first dismisses an in-View modal, then pops the native route stack. */

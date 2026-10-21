@@ -14,6 +14,17 @@ import org.json.*;
 /** Real host + downloaded JAR + deterministic API/MP4 fixtures. Compatible with API 14. */
 public final class BlPluginInstrumentation extends Instrumentation {
     private Bundle args;private volatile MainActivity activity;private JarChannelRuntime runtime;private Object plugin;private View root;
+    private java.util.Map<String,?> savedHostPreferences;
+    private void preserveHostSelection(){savedHostPreferences=getTargetContext().getSharedPreferences("tv_player",0).getAll();}
+    private void restoreHostSelection(){
+        if(savedHostPreferences==null)return;
+        android.content.SharedPreferences p=getTargetContext().getSharedPreferences("tv_player",0);android.content.SharedPreferences.Editor e=p.edit();
+        java.util.Set<String> keys=new java.util.HashSet<String>(savedHostPreferences.keySet());keys.addAll(p.getAll().keySet());
+        for(String key:keys)if(key.startsWith("last_channel_")||key.equals("last_group_index_v2")){
+            Object value=savedHostPreferences.get(key);if(value==null)e.remove(key);else if(value instanceof String)e.putString(key,(String)value);else if(value instanceof Integer)e.putInt(key,(Integer)value);else if(value instanceof Long)e.putLong(key,(Long)value);
+        }
+        e.commit();savedHostPreferences=null;
+    }
     public void onCreate(Bundle args){super.onCreate(args);this.args=args;start();}
     public void callActivityOnResume(Activity a){super.callActivityOnResume(a);if(a instanceof MainActivity){a.getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON|WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED|WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD|WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON);activity=(MainActivity)a;}}
     private static Object field(Object o,String name)throws Exception{Class<?> c=o.getClass();while(c!=null){try{Field f=c.getDeclaredField(name);f.setAccessible(true);return f.get(o);}catch(NoSuchFieldException ignored){c=c.getSuperclass();}}throw new NoSuchFieldException(name);}
@@ -50,13 +61,40 @@ public final class BlPluginInstrumentation extends Instrumentation {
         java.security.cert.Certificate cert;try(InputStream in=new FileInputStream(path)){cert=java.security.cert.CertificateFactory.getInstance("X.509").generateCertificate(in);}
         java.security.KeyStore keys=java.security.KeyStore.getInstance(java.security.KeyStore.getDefaultType());keys.load(null);keys.setCertificateEntry("fixture",cert);
         javax.net.ssl.TrustManagerFactory managers=javax.net.ssl.TrustManagerFactory.getInstance(javax.net.ssl.TrustManagerFactory.getDefaultAlgorithm());managers.init(keys);
-        javax.net.ssl.X509TrustManager trust=(javax.net.ssl.X509TrustManager)managers.getTrustManagers()[0];javax.net.ssl.SSLContext tls=javax.net.ssl.SSLContext.getInstance("TLS");tls.init(null,new javax.net.ssl.TrustManager[]{trust},null);
-        okhttp3.OkHttpClient client=NetworkClient.sharedClient().newBuilder().sslSocketFactory(tls.getSocketFactory(),trust).hostnameVerifier(new javax.net.ssl.HostnameVerifier(){public boolean verify(String host,javax.net.ssl.SSLSession session){return host.equals(args.getString("fixtureHost"));}}).build();
+        final javax.net.ssl.X509TrustManager fixtureTrust=(javax.net.ssl.X509TrustManager)managers.getTrustManagers()[0];
+        javax.net.ssl.TrustManagerFactory defaults=javax.net.ssl.TrustManagerFactory.getInstance(javax.net.ssl.TrustManagerFactory.getDefaultAlgorithm());defaults.init((java.security.KeyStore)null);
+        final javax.net.ssl.X509TrustManager systemTrust=(javax.net.ssl.X509TrustManager)defaults.getTrustManagers()[0];
+        javax.net.ssl.X509TrustManager trust=new javax.net.ssl.X509TrustManager(){
+            public java.security.cert.X509Certificate[] getAcceptedIssuers(){return systemTrust.getAcceptedIssuers();}
+            public void checkClientTrusted(java.security.cert.X509Certificate[] chain,String auth)throws java.security.cert.CertificateException{systemTrust.checkClientTrusted(chain,auth);}
+            public void checkServerTrusted(java.security.cert.X509Certificate[] chain,String auth)throws java.security.cert.CertificateException{try{systemTrust.checkServerTrusted(chain,auth);}catch(java.security.cert.CertificateException e){fixtureTrust.checkServerTrusted(chain,auth);}}
+        };
+        javax.net.ssl.SSLContext tls=javax.net.ssl.SSLContext.getInstance("TLS");tls.init(null,new javax.net.ssl.TrustManager[]{trust},null);
+        final javax.net.ssl.HostnameVerifier original=NetworkClient.sharedClient().hostnameVerifier();
+        okhttp3.OkHttpClient client=NetworkClient.sharedClient().newBuilder().sslSocketFactory(tls.getSocketFactory(),trust).hostnameVerifier(new javax.net.ssl.HostnameVerifier(){public boolean verify(String host,javax.net.ssl.SSLSession session){return host.equals(args.getString("fixtureHost"))||original.verify(host,session);}}).build();
         for(String name:new String[]{"client","factory"}){Field f=NetworkClient.class.getDeclaredField(name);f.setAccessible(true);f.set(null,name.equals("client")?client:new okhttp3.OkUrlFactory(client));}GithubProxy.setEnabled(false);
+    }
+    private void armFault(String mode)throws Exception{try(okhttp3.Response r=NetworkClient.sharedClient().newCall(new okhttp3.Request.Builder().url(UriOrigin(args.getString("source"))+"/__fixture/fault?mode="+mode).build()).execute()){check(r.isSuccessful(),"Could not arm test fixture fault");}}
+    private void waitText(String value)throws Exception{long end=SystemClock.elapsedRealtime()+15000;while(SystemClock.elapsedRealtime()<end){if(containsText(root,value))return;SystemClock.sleep(100);}throw new AssertionError("Missing error text: "+value);}
+    private void errorScenarios()throws Exception{
+        for(String mode:new String[]{"http","json","business"}){
+            armFault(mode);click("热门");waitRoute("popular");waitText("查看错误详情");click("错误详情");
+            waitText(mode.equals("http")?"HTTP：503":mode.equals("json")?"响应格式":"业务码：-352");
+            check(containsText(root,"GET http://127.0.0.1:39626/x/web-interface/popular"),"Missing failing API method/path");
+            check(!containsText(root,"fixture-secret-token"),"Credential leaked into error details");
+            if(mode.equals("http")){waitText("bl-fixture-503");screenshot("bl-http-error.png");click("复制详情");final String[] clip={""};runOnMainSync(new Runnable(){public void run(){android.content.ClipboardManager c=(android.content.ClipboardManager)getTargetContext().getSystemService(Context.CLIPBOARD_SERVICE);if(c.hasPrimaryClip())clip[0]=c.getPrimaryClip().getItemAt(0).coerceToText(getTargetContext()).toString();}});check(clip[0].contains("HTTP：503")&&!clip[0].contains("fixture-secret-token"),"Copied diagnostics missing or unredacted");}
+            key(KeyEvent.KEYCODE_BACK);check(field(plugin,"modal")==null,"Error details BACK did not close panel");click("刷新");waitItems();
+        }
+        click("推荐");waitItems();key(KeyEvent.KEYCODE_DPAD_RIGHT);key(KeyEvent.KEYCODE_DPAD_CENTER);waitRoute("detail");armFault("media");click("播放");waitRoute("player");long end=SystemClock.elapsedRealtime()+30000;
+        while(SystemClock.elapsedRealtime()<end&&!"error".equals(field(field(plugin,"player"),"state")))SystemClock.sleep(100);
+        check("error".equals(field(field(plugin,"player"),"state")),"Rejected CDN did not produce a terminal player error");key(KeyEvent.KEYCODE_MENU);option("错误详情");waitText("HTTP：403");waitText("what=");
+        check(!containsText(root,"fixture-secret-token"),"CDN token leaked into player diagnostics");screenshot("bl-media-error.png");key(KeyEvent.KEYCODE_BACK);key(KeyEvent.KEYCODE_BACK);closePlayback();
     }
     public void onStart(){Bundle result=new Bundle();int code=0;long start=SystemClock.elapsedRealtime();
         try{
-            NetworkClient.initialize(getTargetContext());trustFixture();getTargetContext().getSharedPreferences("ntv-bl",0).edit().clear().putBoolean("systemPlayer","true".equals(args.getString("system"))).putBoolean("prefer_dash","true".equals(args.getString("dash"))).apply();
+            Bundle processInfo=new Bundle();processInfo.putString("stream","BL_TEST_PID="+android.os.Process.myPid()+"\n");sendStatus(0,processInfo);
+            check("true".equals(android.net.Uri.parse(args.getString("source")).getQueryParameter("testPreferences")),"Tests require isolated plugin preferences");
+            preserveHostSelection();NetworkClient.initialize(getTargetContext());trustFixture();getTargetContext().getSharedPreferences("ntv-bl-instrumentation",0).edit().clear().putBoolean("systemPlayer","true".equals(args.getString("system"))).putBoolean("prefer_dash","true".equals(args.getString("dash"))).apply();
             getTargetContext().startActivity(new Intent(getTargetContext(),MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));long end=SystemClock.elapsedRealtime()+30000;while(activity==null&&SystemClock.elapsedRealtime()<end)SystemClock.sleep(50);check(activity!=null,"Activity did not resume");SystemClock.sleep(2500);
             runOnMainSync(new Runnable(){public void run(){try{
                 Channel channel=new Channel("1","BL 单 View","",args.getString("source"),null,null);ChannelCatalog.GROUPS=new ChannelCatalog.Group[]{new ChannelCatalog.Group("视频",ChannelCatalog.SOURCE_CUSTOM,new Channel[]{channel})};
@@ -64,13 +102,16 @@ public final class BlPluginInstrumentation extends Instrumentation {
             }catch(Exception e){throw new RuntimeException(e);}}});
             runtime=(JarChannelRuntime)field(activity,"jarChannelRuntime");end=SystemClock.elapsedRealtime()+60000;while(SystemClock.elapsedRealtime()<end){plugin=field(runtime,"plugin");if(plugin!=null)break;SystemClock.sleep(100);}check(plugin!=null,"JAR plugin did not load");root=(View)field(runtime,"view");waitItems();
             end=SystemClock.elapsedRealtime()+20000;while((root.getWidth()==0||root.getHeight()==0||!root.isShown()||!root.hasWindowFocus())&&SystemClock.elapsedRealtime()<end)SystemClock.sleep(100);check(root.getWidth()>0&&root.getHeight()>0&&root.isShown()&&root.hasWindowFocus(),"Native root did not become visible/focused");SystemClock.sleep(600);
-            check(field(runtime,"browser")==null,"Native channel created a WebView");check(field(field(plugin,"api"),"client")==NetworkClient.sharedClient(),"Plugin did not reuse host OkHttp");screenshot("bl-home.png");
+            check(field(runtime,"browser")==null,"Native channel created a WebView");check(field(field(plugin,"api"),"client")==NetworkClient.sharedClient(),"Plugin did not reuse host OkHttp");check(field(field(plugin,"api"),"prefs")==getTargetContext().getSharedPreferences("ntv-bl-instrumentation",0),"Plugin did not isolate test account/preferences");screenshot("bl-home.png");
+            if("true".equals(args.getString("errors"))){errorScenarios();result.putString("stream","PASS: HTTP 503, malformed JSON, business -352, failing CDN 403, native error-details UI/copy/BACK, recovery and credential redaction");code=-1;return;}
             result.putLong("firstCardsMs",SystemClock.elapsedRealtime()-start);result.putInt("sdk",Build.VERSION.SDK_INT);result.putString("mode","true".equals(args.getString("smoke"))?"smoke":"full");
             Bundle focusStatus=new Bundle();View initialFocus=root.findFocus();focusStatus.putString("stream","BL_FOCUS "+(initialFocus==null?"null":initialFocus.getClass().getName()+":"+initialFocus.getContentDescription())+"\n");sendStatus(0,focusStatus);
             key(KeyEvent.KEYCODE_DPAD_RIGHT);key(KeyEvent.KEYCODE_DPAD_CENTER);waitRoute("detail");click("播放");waitRoute("player");
             end=SystemClock.elapsedRealtime()+30000;Object player=null;while(SystemClock.elapsedRealtime()<end){player=field(plugin,"player");if(player!=null&&"playing".equals(field(player,"state")))break;SystemClock.sleep(100);}check(player!=null&&"playing".equals(field(player,"state")),"Player did not prepare");
             final Object runningPlayer=player;Method position=player.getClass().getDeclaredMethod("position");position.setAccessible(true);SystemClock.sleep(1500);long p1=((Number)position.invoke(player)).longValue();SystemClock.sleep(800);long p2=((Number)position.invoke(player)).longValue();check(p2>p1,"Playback clock did not advance");
             Object engine=field(player,"engine");result.putString("engine",engine.getClass().getName());result.putLong("playbackMs",p2);
+            int soak=0;try{soak=Integer.parseInt(args.getString("soakSeconds","0"));}catch(NumberFormatException ignored){}long soakEnd=SystemClock.elapsedRealtime()+Math.min(600,Math.max(0,soak))*1000L;
+            while(SystemClock.elapsedRealtime()<soakEnd){SystemClock.sleep(2000);check("playing".equals(field(player,"state")),"Playback stopped during sustained test: "+field(player,"state"));long at=((Number)position.invoke(player)).longValue();check(at>p2,"Playback clock stalled during sustained test");p2=at;Bundle sample=new Bundle();sample.putString("stream","BL_SOAK positionMs="+at+" javaUsed="+(Runtime.getRuntime().totalMemory()-Runtime.getRuntime().freeMemory())+" nativeUsed="+Debug.getNativeHeapAllocatedSize()+"\n");sendStatus(0,sample);}
             if("true".equals(args.getString("real"))){Object dm=field(player,"danmaku");end=SystemClock.elapsedRealtime()+12000;while(SystemClock.elapsedRealtime()<end&&((java.util.List<?>)field(dm,"lines")).isEmpty())SystemClock.sleep(100);result.putInt("officialDanmaku",((java.util.List<?>)field(dm,"lines")).size());result.putLong("officialDanmakuDraws",((Number)field(dm,"drawnCount")).longValue());result.putString("officialDanmakuStatus",String.valueOf(field(field(plugin,"dmFeed"),"status")));}
             Bundle playing=new Bundle();playing.putString("stream","BL_PLAYING engine="+engine.getClass().getName()+" position="+p2+"\n");sendStatus(0,playing);
             key(KeyEvent.KEYCODE_MEDIA_PAUSE);check("paused".equals(field(player,"state")),"Remote pause failed");key(KeyEvent.KEYCODE_MEDIA_PLAY);check("playing".equals(field(player,"state")),"Remote play failed");
@@ -90,9 +131,9 @@ public final class BlPluginInstrumentation extends Instrumentation {
             }
             if(!"true".equals(args.getString("real"))&&!"true".equals(args.getString("smoke"))){
                 Object dm=field(player,"danmaku");end=SystemClock.elapsedRealtime()+10000;while(SystemClock.elapsedRealtime()<end&&((Number)field(dm,"drawnCount")).longValue()==0)SystemClock.sleep(100);check(((Number)field(dm,"drawnCount")).longValue()>0,"Danmaku never rendered");check(((java.util.List<?>)field(dm,"lines")).size()>=15,"Protobuf segments were not loaded");result.putLong("danmakuDraws",((Number)field(dm,"drawnCount")).longValue());
-                controls();key(KeyEvent.KEYCODE_MENU);option("弹幕设置");screenshot("bl-danmaku-settings.png");option("弹幕透明度");option("50%");check(getTargetContext().getSharedPreferences("ntv-bl",0).getFloat("dm_alpha",0)==.5f,"Danmaku opacity setting not persisted");
-                controls();key(KeyEvent.KEYCODE_MENU);option("播放速度");option("1.5x");check(getTargetContext().getSharedPreferences("ntv-bl",0).getFloat("play_speed",1)==("true".equals(args.getString("system"))?1:1.5f),"Playback speed setting failed");
-                controls();key(KeyEvent.KEYCODE_MENU);option("画面缩放");option("拉伸");check(getTargetContext().getSharedPreferences("ntv-bl",0).getString("screen_ratio","").equals("拉伸"),"Screen ratio setting failed");
+                controls();key(KeyEvent.KEYCODE_MENU);option("弹幕设置");screenshot("bl-danmaku-settings.png");option("弹幕透明度");option("50%");check(getTargetContext().getSharedPreferences("ntv-bl-instrumentation",0).getFloat("dm_alpha",0)==.5f,"Danmaku opacity setting not persisted");
+                controls();key(KeyEvent.KEYCODE_MENU);option("播放速度");option("1.5x");check(getTargetContext().getSharedPreferences("ntv-bl-instrumentation",0).getFloat("play_speed",1)==("true".equals(args.getString("system"))?1:1.5f),"Playback speed setting failed");
+                controls();key(KeyEvent.KEYCODE_MENU);option("画面缩放");option("拉伸");check(getTargetContext().getSharedPreferences("ntv-bl-instrumentation",0).getString("screen_ratio","").equals("拉伸"),"Screen ratio setting failed");
                 for(int n=0;n<4;n++){Object old=field(player,"engine");key(n%2==0?KeyEvent.KEYCODE_MEDIA_PREVIOUS:KeyEvent.KEYCODE_MEDIA_NEXT);waitPlaying(old);check(((Number)field(plugin,"cid")).longValue()==(n%2==0?2000:3000),"Remote part switch CID mismatch");}
                 Object beforeLine=field(player,"engine");controls();key(KeyEvent.KEYCODE_MENU);option("播放线路");option("备用线路 1");waitPlaying(beforeLine);check(String.valueOf(field(player,"source")).contains("backup=1"),"CDN backup line was not selected");
                 controls();key(KeyEvent.KEYCODE_MENU);option("控制栏与播放偏好");option("默认启用字幕");end=SystemClock.elapsedRealtime()+10000;while(SystemClock.elapsedRealtime()<end&&((JSONArray)field(player,"captions")).length()==0)SystemClock.sleep(100);check(((JSONArray)field(player,"captions")).length()>0,"Default subtitle preference did not load subtitles");
@@ -106,7 +147,7 @@ public final class BlPluginInstrumentation extends Instrumentation {
                 Method playlist=proxy.getClass().getDeclaredMethod("playlist",String.class,String.class);playlist.setAccessible(true);String rewritten=(String)playlist.invoke(proxy,"#EXTM3U\n#EXT-X-KEY:METHOD=AES-128,URI=\"key.bin\"\n#EXT-X-MAP:URI=\"init.mp4\"\nsegment.ts\n#EXT-X-ENDLIST\n",upstream);check(rewritten.contains("URI=\"http://127.0.0.1:")&&!rewritten.contains("key.bin")&&!rewritten.contains("segment.ts")&&!rewritten.contains("init.mp4"),"HLS URI rewrite failed");
             }
             click("直播");waitItems();key(KeyEvent.KEYCODE_DPAD_RIGHT);key(KeyEvent.KEYCODE_DPAD_CENTER);waitRoute("player");Object liveEngine=waitPlaying(null);Object live=field(plugin,"liveDanmaku");check(live!=null,"Live socket client missing");end=SystemClock.elapsedRealtime()+("true".equals(args.getString("real"))?20000:10000);while(SystemClock.elapsedRealtime()<end&&((Number)field(live,"received")).longValue()==0&&!String.valueOf(field(live,"status")).equals("直播弹幕已连接"))SystemClock.sleep(100);SystemClock.sleep(1200);
-            if(!"true".equals(args.getString("real"))){check(((Number)field(live,"received")).longValue()>0,"Live danmaku not received");Object dm=field(field(plugin,"player"),"danmaku");check(((Number)field(dm,"drawnCount")).longValue()>0,"Live danmaku did not draw");if(!"true".equals(args.getString("smoke"))){controls();key(KeyEvent.KEYCODE_MENU);option("直播画质");option("原画");waitPlaying(liveEngine);check(getTargetContext().getSharedPreferences("ntv-bl",0).getInt("live_quality",0)==10000,"Live quality selection failed");}}
+            if(!"true".equals(args.getString("real"))){check(((Number)field(live,"received")).longValue()>0,"Live danmaku not received");Object dm=field(field(plugin,"player"),"danmaku");check(((Number)field(dm,"drawnCount")).longValue()>0,"Live danmaku did not draw");if(!"true".equals(args.getString("smoke"))){controls();key(KeyEvent.KEYCODE_MENU);option("直播画质");option("原画");waitPlaying(liveEngine);check(getTargetContext().getSharedPreferences("ntv-bl-instrumentation",0).getInt("live_quality",0)==10000,"Live quality selection failed");}}
             if("true".equals(args.getString("real")))SystemClock.sleep(8000);result.putLong("liveDanmaku",((Number)field(live,"received")).longValue());result.putString("liveDanmakuStatus",String.valueOf(field(live,"status")));screenshot("bl-live.png");Bundle liveShot=new Bundle();liveShot.putString("stream","BL_CAPTURE bl-live.png\n");sendStatus(0,liveShot);SystemClock.sleep(600);closePlayback();waitRoute("live");check(Boolean.TRUE.equals(field(live,"closed")),"Live socket not disposed");
             click("搜索");waitRoute("search");runOnMainSync(new Runnable(){public void run(){EditText input=findEdit(root);check(input!=null,"Search input missing");input.setText("true".equals(args.getString("real"))?"哔哩哔哩":"BL test");}});click("搜索");waitRoute("results");
             try{waitItems();result.putString("search","cards");}catch(AssertionError noCards){if(!"true".equals(args.getString("real")))throw noCards;if(containsText(root,"要求验证"))result.putString("search","site_verification_required");else if(containsText(root,"暂无内容"))result.putString("search","no_public_results");else throw noCards;}screenshot("bl-search.png");
@@ -120,7 +161,7 @@ public final class BlPluginInstrumentation extends Instrumentation {
             check(((java.util.concurrent.ThreadPoolExecutor)field(field(plugin,"proxy"),"workers")).awaitTermination(5,TimeUnit.SECONDS),"Media proxy workers did not terminate");check(((java.net.ServerSocket)field(field(plugin,"proxy"),"server")).isClosed(),"Proxy server port remained open");
             result.putString("stream","PASS: native JAR, shared host OkHttp, remote navigation, video decode/time advance, pause/resume, panel BACK, playback release, search, local history and root exit; "+result.toString());code=-1;
         }catch(Throwable error){result.putString("stream",android.util.Log.getStackTraceString(error));try{if(root!=null&&root.getWidth()>0&&root.getHeight()>0)screenshot("bl-error.png");}catch(Exception ignored){}}
-        finally{if(activity!=null)runOnMainSync(new Runnable(){public void run(){activity.finish();}});}finish(code,result);
+        finally{if(activity!=null){runOnMainSync(new Runnable(){public void run(){activity.finish();}});waitForIdleSync();}restoreHostSelection();finish(code,result);}
     }
     private static String UriOrigin(String source){return android.net.Uri.parse(source).getQueryParameter("apiOrigin");}
 }

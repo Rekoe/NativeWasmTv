@@ -3,6 +3,8 @@
 # may be shrunk normally; keeping the entire dependency prevented their removal.
 -keep class tv.danmaku.ijk.media.player.IjkMediaPlayer { *; }
 -keep class tv.danmaku.ijk.media.player.IjkMediaPlayer$* { *; }
+# Downloaded JARs call loadLibrariesOnce(IjkLibLoader); its parameter is part of the ABI.
+-keep interface tv.danmaku.ijk.media.player.IjkLibLoader { *; }
 -keep class tv.danmaku.ijk.media.player.exceptions.IjkMediaException { *; }
 -keep class tv.danmaku.ijk.media.player.ffmpeg.FFmpegApi { *; }
 -keep interface tv.danmaku.ijk.media.player.misc.IAndroidIO { *; }

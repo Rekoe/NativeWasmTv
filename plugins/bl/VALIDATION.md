@@ -1,4 +1,42 @@
-# BL JAR v2 发布验证
+# BL JAR 发布验证
+
+## v3 验证（2026-10-21）
+
+新增会话内错误详情、可复制的脱敏诊断、API/媒体原因链、后台回退记录和准备超时提示。
+构建仍通过 API 14 框架编译与产物归属校验；保留源文件和行号，已在设备异常栈确认可定位到 Java 源码。
+最终 JAR 591,288 字节，SHA-256 `1895555bb1e5220c42055aedf8ef80fe0ea4d01cdff646df5ca14f046a7d9844`。
+
+- JVM：脱敏、重复脱敏、HTTP/业务上下文、原因链、DNS/TLS/超时建议、20 条记录边界通过。
+- 实际共享 OkHttp + 本地故障服务：HTTP 503 与追踪号、非法 JSON、业务 -352、媒体 403、恢复请求及响应释放通过。
+- Android 9 / API 28 辅助验证：开发阶段错误详情显示/复制/返回、失败后恢复；DASH 完整回归与额外 20 秒播放观察通过。
+- Android 7.1.1 / API 25，小米 6：按用户要求覆盖正式包 `xiao.bu.tv`，保留应用数据和正式 BL 偏好。
+  系统拒绝新测试包，改用原签名同包名的临时内置 instrumentation；测试偏好单独存于 `ntv-bl-instrumentation`。
+  验证结束重新覆盖无测试入口的正式 release APK，签名与原包一致。
+
+| 7.1 测试路径 | 结果与范围 |
+| --- | --- |
+| DASH 完整回归，两轮 | 通过；最终轮含额外 20 秒播放观察，画质/连续切 P/备用线路/字幕/倍速/缩放/后台恢复/弹幕/直播换线/搜索/历史/二维码/退出释放 |
+| IJK 完整回归，两轮 | 通过；初轮含额外 20 秒观察，最终轮重复全部操作 |
+| 故障注入 | HTTP 503/追踪号、非法 JSON、业务 -352、媒体 403、原始媒体错误、详情复制/脱敏/嵌套返回及请求恢复通过 |
+| 系统播放器基础回归 | 通过；点播与直播、403 换线、弹幕、暂停/恢复、MENU/返回、搜索/历史/二维码及退出；未把 smoke 表述为连续切 P 压力验收 |
+| 真实站点匿名读取 | 推荐/详情、DASH 点播、分段弹幕、本地历史、直播、二维码与退出通过；载入 486 条点播弹幕，记录 368 次绘制；搜索返回站点验证提示；直播连接认证成功，本次短测 0 条真实聊天消息 |
+
+实测修复：
+
+- 宿主 R8 改名 `IjkLibLoader` 导致下载 JAR 的 `loadLibrariesOnce` 找不到，已保留该公共参数类型。
+  最终 APK 的 ABI 检查通过，也验证宿主没有 Exo 与临时测试入口。此故障需更新宿主 APK，单换 JAR 无法修复宿主接口。
+- Android 系统 MediaPlayer 对 403 长时间内部重试：准备中检测共享网络层已有的失败并及时换线/显示错误，避免无限加载。
+- 新版 JDK 使用 `-target 8` 仍可能生成旧 Android 没有的 ByteBuffer 协变方法调用：JDK 9+ 自动使用 `--release 8`，
+  产物检查拒绝这类方法描述符。JDK 8 与 JDK 17 均构建并通过检查，发布产物使用 JDK 8。
+
+最终 DASH 轮次读取 Java 堆约 40.4 MiB、native 堆约 27.2 MiB，包含整个宿主进程；未做长时间功耗或帧率基准。
+本轮没有重新验收 Android 4.4，也未连接 Android 4.0；下面 v2 记录保留原先范围。没有执行真实账号写操作。
+
+本地证据：`output/bl/tests/ff0316c7-fixture-dash-formal-v3-final/`、
+`ff0316c7-fixture-ijk-formal-v3-final/`、`ff0316c7-fixture-ijk-errors-formal-v3-final/`、
+`ff0316c7-fixture-system-smoke-formal-v3-system-compatible/`、`ff0316c7-real-dash-formal-v3-official/`。
+
+## v2 发布记录
 
 日期：2026-10-21。JAR 版本 2、API 14 目标，539 KiB 以下，具体校验值以同目录 `dist/bl.sha256` 为准。测试使用独立包名 `xiao.bu.tv.channeltest` 的 release 宿主，不覆盖正式包。
 

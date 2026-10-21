@@ -17,6 +17,10 @@ final class BlApi {
     private static final int[] MIX={46,47,18,2,53,8,23,32,15,50,10,31,58,3,45,35,27,43,5,49,33,9,42,19,29,28,14,39,12,38,41,13,37,48,7,16,24,55,40,61,26,17,0,1,60,51,30,4,22,25,54,21,56,59,6,63,57,62,11,36,20,34,44,52};
     final OkHttpClient client;
     final SharedPreferences prefs;
+    final BlDiagnostics diagnostics=new BlDiagnostics();
+    private final Map<String,BlDiagnostics.Failure> transportFailures=Collections.synchronizedMap(new LinkedHashMap<String,BlDiagnostics.Failure>(32,.75f,true){protected boolean removeEldestEntry(Map.Entry<String,BlDiagnostics.Failure> entry){return size()>32;}});
+    BlDiagnostics.Failure transportFailure(String url){HttpUrl parsed=HttpUrl.parse(url);return parsed==null?null:transportFailures.get(parsed.toString());}
+    void clearTransportFailure(String url){HttpUrl parsed=HttpUrl.parse(url);if(parsed!=null)transportFailures.remove(parsed.toString());}
     private final JSONObject config;
     private final Set<Call> pending=Collections.newSetFromMap(new ConcurrentHashMap<Call,Boolean>());
     private final List<Cookie> cookies=new ArrayList<>();
@@ -53,12 +57,13 @@ final class BlApi {
         if(closed)throw new IOException("频道已关闭");final Call call=client.newCall(request);pending.add(call);if(owner!=null)owner.add(call);
         try{
             if(closed){call.cancel();throw new IOException("频道已关闭");}Response response=call.execute();final ResponseBody body=response.body();
+            if(!response.isSuccessful()){BlDiagnostics.Failure failure=BlDiagnostics.response(response);transportFailures.put(request.url().toString(),failure);diagnostics.record("HTTP 响应",failure,"");}else transportFailures.remove(request.url().toString());
             if(body==null){pending.remove(call);if(owner!=null)owner.remove(call);return response;}
             final okio.BufferedSource source=okio.Okio.buffer(new okio.ForwardingSource(body.source()){
                 public void close()throws IOException{try{super.close();}finally{pending.remove(call);if(owner!=null)owner.remove(call);}}
             });
             return response.newBuilder().body(new OwnedBody(call,body.contentType(),body.contentLength(),source)).build();
-        }catch(IOException e){pending.remove(call);if(owner!=null)owner.remove(call);throw e;}
+        }catch(IOException e){pending.remove(call);if(owner!=null)owner.remove(call);if(closed||call.isCanceled())throw e;BlDiagnostics.Failure failure=new BlDiagnostics.Failure("网络连接",e.getMessage(),request,0,0,"","",e);transportFailures.put(request.url().toString(),failure);diagnostics.record("连接请求",failure,"");throw failure;}
     }
     private static final class OwnedBody extends ResponseBody {
         final Call call;final MediaType type;final long length;final okio.BufferedSource source;
@@ -68,7 +73,7 @@ final class BlApi {
     // Call.cancel schedules HTTP/2 RST on OkHttp's writer. Response.close may write it inline.
     void cancel(Response response){if(response.body() instanceof OwnedBody)((OwnedBody)response.body()).call.cancel();}
     byte[] bytes(String url,int limit)throws Exception{
-        try(Response r=execute(request(url).build())){if(!r.isSuccessful()||r.body()==null)throw new IOException("HTTP "+r.code());InputStream in=r.body().byteStream();if("deflate".equalsIgnoreCase(r.header("Content-Encoding")))in=new java.util.zip.InflaterInputStream(in);return read(in,limit);}
+        try(Response r=execute(request(url).build())){if(!r.isSuccessful()||r.body()==null)throw BlDiagnostics.response(r);InputStream in=r.body().byteStream();if("deflate".equalsIgnoreCase(r.header("Content-Encoding")))in=new java.util.zip.InflaterInputStream(in);try{return read(in,limit);}catch(IOException e){throw new BlDiagnostics.Failure("响应读取",e.getMessage(),r.request(),r.code(),0,"",r.header("Content-Type",""),e);}}
     }
     static byte[] read(InputStream in,int max)throws IOException{ByteArrayOutputStream b=new ByteArrayOutputStream();byte[] chunk=new byte[16384];int n;while((n=in.read(chunk))!=-1){if(b.size()+n>max)throw new IOException("响应超过大小限制");b.write(chunk,0,n);}return b.toByteArray();}
     String endpoint(String origin,String path){
@@ -89,12 +94,12 @@ final class BlApi {
     }
     private JSONObject json(Request request)throws Exception{
         try(Response r=execute(request)){
-            receiveCookies(r);if(!r.isSuccessful()||r.body()==null)throw new IOException("服务响应 HTTP "+r.code());
+            receiveCookies(r);if(!r.isSuccessful()||r.body()==null)throw BlDiagnostics.response(r);
             try{java.text.SimpleDateFormat f=new java.text.SimpleDateFormat("EEE, dd MMM yyyy HH:mm:ss zzz",Locale.US);long server=f.parse(r.header("Date")).getTime()+Math.min(3600,Long.parseLong(r.header("Age","0")))*1000;long offset=server-System.currentTimeMillis();if(Math.abs(offset)<7L*86400000)serverOffset=offset;}catch(Exception ignored){}
-            JSONObject value=new JSONObject(new String(read(r.body().byteStream(),8*1024*1024),"UTF-8"));int code=value.optInt("code",0);
+            JSONObject value;try{value=new JSONObject(new String(read(r.body().byteStream(),8*1024*1024),"UTF-8"));}catch(JSONException e){throw new BlDiagnostics.Failure("响应格式","接口响应不是有效 JSON",request,r.code(),0,r.header("X-Bili-Trace-Id",""),r.header("Content-Type",""),null);}catch(IOException e){throw new BlDiagnostics.Failure("响应读取",e.getMessage(),request,r.code(),0,"",r.header("Content-Type",""),e);}int code=value.optInt("code",0);
             boolean navKeys=request.url().encodedPath().endsWith("/x/web-interface/nav")&&value.optJSONObject("data")!=null&&value.optJSONObject("data").optJSONObject("wbi_img")!=null;
-            if(code!=0&&!navKeys)throw new ApiException(code,value.optString("message",value.optString("msg","请求失败")));
-            JSONObject data=value.optJSONObject("data");if(data!=null&&data.has("v_voucher"))throw new ApiException(-352,"站点要求验证，请登录后重试或稍后再试");return value;
+            if(code!=0&&!navKeys)throw new ApiException(code,value.optString("message",value.optString("msg","请求失败")),request,r.header("X-Bili-Trace-Id",""));
+            JSONObject data=value.optJSONObject("data");if(data!=null&&data.has("v_voucher"))throw new ApiException(-352,"站点要求验证，请登录后重试或稍后再试",request,r.header("X-Bili-Trace-Id",""));return value;
         }
     }
     private void sign(Map<String,String> values)throws Exception{synchronized(signingLock){
@@ -145,7 +150,7 @@ final class BlApi {
     JSONArray comments(long aid,int page)throws Exception{return array(data(get("/x/v2/reply","type","1","oid",""+aid,"pn",""+page,"ps","20","sort","2")),"replies");}
     JSONArray subtitles(String bvid,long cid)throws Exception{JSONObject sub=data(get("/x/player/wbi/v2","bvid",bvid,"cid",""+cid)).optJSONObject("subtitle");return array(sub,"subtitles");}
     JSONArray live(int page)throws Exception{return array(data(get(LIVE,"/xlive/web-interface/v1/webMain/getMoreRecList",map("platform","web","page",""+page),false)),"recommend_room_list");}
-    JSONObject livePlay(long room,int quality,boolean system)throws Exception{try{return BlLiveStreams.select(data(get(LIVE,"/xlive/web-room/v2/index/getRoomPlayInfo",map("room_id",""+room,"protocol","0,1","format","0,1,2","codec","0","qn",""+quality,"platform","web","ptype","8"),false)),system);}catch(Exception e){return BlLiveStreams.legacy(data(get(LIVE,"/room/v1/Room/playUrl",map("cid",""+room,"platform","h5","quality","4","qn",""+quality),false)));}}
+    JSONObject livePlay(long room,int quality,boolean system)throws Exception{try{return BlLiveStreams.select(data(get(LIVE,"/xlive/web-room/v2/index/getRoomPlayInfo",map("room_id",""+room,"protocol","0,1","format","0,1,2","codec","0","qn",""+quality,"platform","web","ptype","8"),false)),system);}catch(Exception e){diagnostics.record("直播 v2 回退旧接口",e,"room="+room+"; 请求画质="+quality);return BlLiveStreams.legacy(data(get(LIVE,"/room/v1/Room/playUrl",map("cid",""+room,"platform","h5","quality","4","qn",""+quality),false)));}}
     JSONObject liveLegacy(long room,int quality)throws Exception{return BlLiveStreams.legacy(data(get(LIVE,"/room/v1/Room/playUrl",map("cid",""+room,"platform","h5","quality","4","qn",""+quality),false)));}
     JSONObject qr()throws Exception{return data(get(PASSPORT,"/x/passport-login/web/qrcode/generate",map(),false));}
     JSONObject poll(String key)throws Exception{return data(get(PASSPORT,"/x/passport-login/web/qrcode/poll",map("qrcode_key",key),false));}
@@ -155,6 +160,6 @@ final class BlApi {
     }catch(Exception ignored){}}
     void savePosition(String bvid,long cid,long position){SharedPreferences.Editor edit=prefs.edit();String key="position:"+bvid+":"+cid;int count=0;for(String existing:prefs.getAll().keySet())if(existing.startsWith("position:")){if(++count>=256&&!existing.equals(key))edit.remove(existing);}edit.putLong(key,position).apply();}
     static JSONArray array(JSONObject object,String name){if(object==null)return new JSONArray();JSONArray a=object.optJSONArray(name);return a==null?new JSONArray():a;}
-    void close(){closed=true;for(Call call:pending)call.cancel();pending.clear();}
-    static final class ApiException extends IOException{final int code;ApiException(int code,String message){super((code==-101?"请先登录":message)+" ("+code+")");this.code=code;}}
+    void close(){closed=true;for(Call call:pending)call.cancel();pending.clear();transportFailures.clear();}
+    static final class ApiException extends BlDiagnostics.Failure{final int code;ApiException(int code,String message){this(code,message,null,"");}ApiException(int code,String message,Request request,String trace){super("接口业务",(code==-101?"请先登录":message)+" ("+code+")",request,request==null?0:200,code,trace,"application/json",null);this.code=code;}}
 }

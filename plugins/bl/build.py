@@ -1,5 +1,5 @@
 """Build a pure DEX + assets channel, checking source against Android 4.0's API jar."""
-import argparse,hashlib,json,pathlib,subprocess,zipfile,os,shutil,urllib.request
+import argparse,hashlib,json,pathlib,subprocess,zipfile,os,shutil,urllib.request,re
 here=pathlib.Path(__file__).resolve().parent
 root=here.parents[1]
 p=argparse.ArgumentParser()
@@ -34,19 +34,25 @@ okhttp=dependency('okhttp.jar');okio=dependency('okio.jar');aar=dependency('ijkp
 zxing_source=dependency('zxing-sources.jar');source=out/'zxing-source'
 with zipfile.ZipFile(zxing_source) as z:z.extractall(source)
 exe='.exe' if os.name=='nt' else ''
+javac=str(java/('javac'+exe));compiler=subprocess.run([javac,'-version'],check=True,capture_output=True,text=True)
+version=re.search(r'javac (\d+)(?:\.(\d+))?',compiler.stdout+compiler.stderr)
+if not version:raise SystemExit('Could not identify javac version')
+major=int(version.group(2)) if version.group(1)=='1' else int(version.group(1))
+language=['--release','8'] if major>=9 else ['-source','8','-target','8']
+android=pathlib.Path(args.android14) if args.android14 else dependency('android14.jar')
+if not android.exists():raise SystemExit('Provide --android14 with the Android 4.0 API stub jar')
+# Newer JDKs need --release: -source/-target alone allow Java 9 Buffer APIs into old Android DEX.
 # javac compiles only QRCodeWriter's source dependency closure: no scanners/decoder UI.
-subprocess.run([str(java/('javac'+exe)),'-encoding','UTF-8','-g:none','-source','8','-target','8','-sourcepath',str(source),'-d',str(classes),str(source/'com/google/zxing/qrcode/QRCodeWriter.java')],check=True)
+subprocess.run([javac,'-encoding','UTF-8','-g:none',*language,'-sourcepath',str(source),'-d',str(classes),str(source/'com/google/zxing/qrcode/QRCodeWriter.java')],check=True)
 ijk=out/'ijk-api.jar'
 with zipfile.ZipFile(aar) as z:ijk.write_bytes(z.read('classes.jar'))
 exo=out/'exoplayer.jar'
 with zipfile.ZipFile(dependency('exoplayer-core.aar')) as z:exo.write_bytes(z.read('classes.jar'))
-android=pathlib.Path(args.android14) if args.android14 else dependency('android14.jar')
-if not android.exists():raise SystemExit('Provide --android14 with the Android 4.0 API stub jar')
 api=root/'app/src/main/java/xiao/bu/tv/jar/ChannelPlugin.java'
 json_api=dependency('json.jar');xml_api=dependency('xmlpull.jar')
 classpath=os.pathsep.join(map(str,[android,json_api,xml_api,okhttp,okio,classes,ijk,exo]))
 sources=[str(api),*map(str,(here/'src').rglob('*.java'))]
-subprocess.run([str(java/('javac'+exe)),'-encoding','UTF-8','-g:none','-source','8','-target','8','-cp',classpath,'-d',str(classes),*sources],check=True)
+subprocess.run([javac,'-encoding','UTF-8','-g:source,lines',*language,'-cp',classpath,'-d',str(classes),*sources],check=True)
 program=out/'program.jar';contract=out/'contract.jar'
 with zipfile.ZipFile(program,'w') as pzip,zipfile.ZipFile(contract,'w') as azip:
     for f in sorted(classes.rglob('*.class')):
@@ -61,7 +67,7 @@ with zipfile.ZipFile(jar,'w',compression=zipfile.ZIP_DEFLATED) as z:
     def entry(name,data):
         info=zipfile.ZipInfo(name,(1980,1,1,0,0,0));info.compress_type=zipfile.ZIP_DEFLATED;info.external_attr=0o100644<<16;z.writestr(info,data)
     entry('classes.dex',(dex/'classes.dex').read_bytes())
-    entry('channel-plugin.json',json.dumps(dict(api=1,version=2,minSdk=14,entry='xiao.bu.channel.bl.BlPlugin',native=True,hostCapability='NativeHost')))
+    entry('channel-plugin.json',json.dumps(dict(api=1,version=3,minSdk=14,entry='xiao.bu.channel.bl.BlPlugin',native=True,hostCapability='NativeHost')))
     for f in sorted((here/'assets').rglob('*')):
         if f.is_file() and f.suffix!='.webp':entry('assets/'+f.relative_to(here/'assets').as_posix(),f.read_bytes())
     for name in ['NOTICE','LICENSE-newBV','LICENSE-ZXing','LICENSE-ExoPlayer']:

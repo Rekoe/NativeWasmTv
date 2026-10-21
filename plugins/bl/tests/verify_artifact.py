@@ -19,6 +19,12 @@ for i in range(word(96)):
     assert name.startswith(('Lxiao/bu/channel/bl/','Lcom/google/zxing/','Lcom/google/android/exoplayer2/')),name
     if word(at+8)!=0xffffffff:assert types[word(at+8)] not in ['Landroid/app/Activity;','Landroid/app/Fragment;','Landroid/app/Service;','Landroid/webkit/WebView;']
 assert not any(t in types for t in ['Landroid/app/Fragment;','Landroid/webkit/WebView;','Landroid/media/MediaPlayer$OnTimedTextListener;'])
+# JDK 9 added covariant Buffer methods absent on Android <=25. -target 8 does not prevent them.
+for i in range(word(88)):
+    owner,proto,name=struct.unpack_from('<HHI',dex,word(92)+8*i)
+    if types[owner].startswith('Ljava/nio/') and string(name) in ['position','limit','mark','reset','clear','flip','rewind']:
+        result=types[word(word(76)+12*proto+4)]
+        assert result in ['I','Ljava/nio/Buffer;'], 'Newer JDK Buffer ABI leaked into API-14 JAR: '+types[owner]+'.'+string(name)+' -> '+result
 # Exo core has optional platform helpers with Activity-typed arguments; no Activity is defined/instantiated by the channel.
 sources=(folder/'src').rglob('*.java')
 for file in sources:

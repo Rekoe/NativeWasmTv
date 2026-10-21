@@ -1,6 +1,7 @@
 -dontoptimize
 -dontobfuscate
 -dontwarn **
+-keepattributes SourceFile,LineNumberTable
 # Preserve the downloaded plugin ABI and stable names used by instrumentation.
 -keep class xiao.bu.channel.bl.** { *; }
 -keep class com.google.zxing.** { *; }

@@ -42,9 +42,34 @@ https://raw.githubusercontent.com/buhanzhe/NativeWasmTv/master/plugins/bl/dist/e
 - Android 5.0+ 直播 WebSocket 弹幕、认证、心跳、zlib 解包、限量批处理和退避重连；4.x 使用近期弹幕接口每 3 秒轮询兼容宿主旧 TLS 的串行读写。后台停止、前台恢复，所有连接仍复用宿主 OkHttp。
 - 遥控器方向/确认、MENU、播放暂停/快进快退/上下集媒体键；返回先逐层关闭弹层，播放中双击返回详情，再按页面堆栈返回。频道根页面双击返回交给宿主退出。
 
-这是第二版，优先对齐 BBLL 的播放器与弹幕，完整差异见 [PARITY.md](PARITY.md)。仍未达到 BBLL/newBV 全部功能等价：会员渐变/高级脚本弹幕、T9 键盘、服务端播放进度同步等未实现；不提供发送评论/弹幕、多账号、离线下载。关注/取消关注和三连已接入确认操作，真实账号扫码确认及写操作尚未验证。账号、地区、付费及接口限制仍有效。
+这是第三版，在播放器和弹幕基础上补充错误诊断与旧 Android 兼容修复，完整差异见 [PARITY.md](PARITY.md)。仍未达到 BBLL/newBV 全部功能等价：会员渐变/高级脚本弹幕、T9 键盘、服务端播放进度同步等未实现；不提供发送评论/弹幕、多账号、离线下载。关注/取消关注和三连已接入确认操作，真实账号扫码确认及写操作尚未验证。账号、地区、付费及接口限制仍有效。
 
 真实接口可读取推荐/详情并播放；未登录搜索在本次测试网络可能返回空结果或 `v_voucher` 验证要求，界面明确提示登录后重试或稍后重试，不会显示成“没有搜索结果”。
+
+## 错误详情（v3）
+
+- 页面右上角「错误详情」，以及播放器 MENU →「错误详情」，均打开根 View 内的诊断面板。
+  方向键滚动、切换「复制详情 / 返回」；返回键先退回上级菜单，再退出弹层。
+- 显示错误编号、设备系统/API/ABI、插件版本、发生阶段、页面/BV/cid/分 P、请求画质，
+  HTTP 方法及接口路径、状态码、站点业务码、服务追踪号、响应类型、异常原因链和处理建议。
+- 播放错误保留 IJK/System 的原始 what/extra；DASH 保留 Exo 的原始异常原因链。
+  记录引擎、格式、线路、解码策略、进度及实际媒体路径；MP4 CDN 错误可关联底层 HTTP 失败。
+  直播换线、硬解转软解、DASH 回退 MP4、分段弹幕回退 XML 均留存原因。
+- 播放接口失败显示持久错误提示，避免停在「正在加载」；解码器准备超过 30 秒也显示错误详情。
+  系统播放器准备中若共享网络层已确认请求失败，立即记录并尝试直播备用线路或显示详情。
+  普通页面上的错误不会在下一次时钟刷新时被覆盖。
+- 每个频道会话最多保留 20 条记录、每条最多 8 KiB，退出后不保留面板历史。
+  `BL-Diagnostics` 日志与复制内容均过滤 Cookie、Authorization、签名、二维码 key 和令牌；
+  URL 不含查询参数与用户密码，不自动上传日志。不记录原始响应正文或请求头。
+
+构建侧检查：`python plugins/bl/tests/diagnostics_unit.py`；启动本地服务后，
+加 `--api-fixture http://127.0.0.1:39626` 可检查真实 OkHttp 的 HTTP 503、JSON 格式错误、
+业务码 -352、媒体 403、失败恢复和资源关闭。诊断面板已在 Android 7.1 正式包上验收。
+
+本轮还修复了宿主 R8 对 `IjkLibLoader` 的改名：它是 JAR 调用 IJK 的方法参数类型，
+必须保留原名。如果旧宿主出现 `NoSuchMethodError: loadLibrariesOnce`，需覆盖安装修复后的 APK。
+`python plugins/bl/tests/verify_host_abi.py 正式APK路径` 可校验混淆后的实际产物，
+同时确认宿主未引入 Exo，也没有遗留临时测试入口。
 
 ## 运行与性能
 
@@ -68,7 +93,31 @@ python plugins/bl/build.py --sdk D:/android/sdk --java-home C:/path/to/jdk8
 
 也可设置 `ANDROID_HOME`、`JAVA_HOME`。脚本只在 `.codex-tmp/bl/build` 写中间产物。依赖版本、SDK 来源及 SHA-256 固定在 `dependencies.json`，优先使用 Gradle 缓存，否则从 Maven Central、Google SDK 和宿主使用的 JCenter 镜像获取。ZXing 3.3.0 只从源码编译 QRCodeWriter 及其依赖，不包含摄像头或扫码 Activity。Exo core 经 `shrink.pro` 裁剪，无下载 Service/Activity 子类；只在 API 16+ 创建 DASH 引擎。ZIP 条目时间固定，方便复核构建产物。
 
+也支持新版 JDK：自动使用 `javac --release 8`，避免 Java 9 ByteBuffer 方法泄漏导致 Android 7.1 直播弹幕崩溃。
+`verify_artifact.py` 会检查最终 DEX 中的方法描述符；本轮发布 JAR 使用 JDK 8 构建。
+
 输出 `dist/bl.jar`、`dist/bl.sha256`、`dist/example.m3u`。宿主接口为 API 1 的可选扩展，既有 Folia BrowserHost/DirectoryHost 不变。插件可使用 M3U 查询参数 `apiOrigin`、`passportOrigin`、`liveOrigin` 指向本地测试接口；正式订阅不包含这些参数。
+
+## 重复测试与诊断验证
+
+测试服务可加 `--host 127.0.0.1`，配合设备 `adb reverse tcp:39626 tcp:39626` 与
+`adb reverse tcp:39627 tcp:39627`。设备测试脚本对应使用 `--fixture-host 127.0.0.1 --cert 本地测试证书`；
+证书仅在测试进程内额外受信，重新启动普通宿主后恢复正常信任，系统证书配置不变。
+重复测试可用 `--skip-install --run-label round-2` 保存每轮证据，
+`--errors` 验证错误详情，`--soak-seconds 20` 延长初次播放观察。
+脚本只保存目标进程日志；真实站点模式不进行账号写操作。
+所有轮次通过 `testPreferences=true` 使用独立的 `ntv-bl-instrumentation` 偏好，
+保留正式 BL 登录、历史和设置；结束后恢复宿主上次播放频道的记录。
+
+设备允许覆盖已有包、却拒绝安装单独测试 APK 时，可按用户要求使用原包名与原签名：
+
+```powershell
+./gradlew.bat :app:assembleArm64Release -I plugins/bl/tests/embedded-runner.gradle --rerun-tasks
+```
+
+这只生成临时测试 APK；设备脚本加 `--embedded-runner --package xiao.bu.tv`。
+切换构建模式时加 `--rerun-tasks`，避免增量编译漏掉手动加入的测试源码。
+测试完成必须不带 init script 重新打正式包、通过 `verify_host_abi.py` 并覆盖安装，移除测试入口。
 
 ## 来源
 

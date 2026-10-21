@@ -1,9 +1,11 @@
 import http.server,threading,ssl,json,urllib.parse,pathlib,socket,re,time,argparse,struct,zlib,base64,hashlib
-args=argparse.ArgumentParser();args.add_argument('--cert',required=True,type=pathlib.Path);args.add_argument('--key',required=True,type=pathlib.Path);args.add_argument('--video',required=True,type=pathlib.Path);options=args.parse_args()
+args=argparse.ArgumentParser();args.add_argument('--cert',required=True,type=pathlib.Path);args.add_argument('--key',required=True,type=pathlib.Path);args.add_argument('--video',required=True,type=pathlib.Path);args.add_argument('--host',help='Advertised host; 127.0.0.1 works with adb reverse');options=args.parse_args()
 ROOT=pathlib.Path(__file__).resolve().parents[3]
 work=ROOT/'.codex-tmp/bl';work.mkdir(parents=True,exist_ok=True)
 s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM);s.connect(('1.1.1.1',80));host=s.getsockname()[0];s.close()
+if options.host:host=options.host
 base=f'http://{host}:39626'
+faults={'mode':''};fault_lock=threading.Lock()
 def video(i=0):return dict(bvid='BV1xx411c7mD' if i==0 else 'BV'+str(1000000000+i),aid=1000+i,cid=2000+i,title=f'BL 原生兼容测试 {i+1:02d}',pic=base+'/cover.png',duration=40,owner=dict(mid=123,name='Native View 测试'),stat=dict(view=123456+i,danmaku=17),desc='本地测试视频，验证单 View 界面、共享 OkHttp、遥控器和旧系统播放。',pages=[dict(cid=2000+i,page=1,part='第一集'),dict(cid=3000+i,page=2,part='第二集')])
 def varint(n):
  data=bytearray()
@@ -31,6 +33,18 @@ class Handler(http.server.BaseHTTPRequestHandler):
  def handle_get(self):
   p=urllib.parse.urlsplit(self.path);q=urllib.parse.parse_qs(p.query);page=int(q.get('pn',q.get('page',q.get('fresh_idx',['1'])))[0]);offset=(page-1)*24
   with (work/'requests.jsonl').open('a',encoding='utf-8') as f:f.write(json.dumps({'time':time.time(),'method':self.command,'path':self.path},ensure_ascii=False)+'\n')
+  if p.path=='/__fixture/fault':
+   with fault_lock:faults['mode']=q.get('mode',[''])[0]
+   return self.response(200,{'code':0})
+  if p.path=='/x/web-interface/popular':
+   with fault_lock:mode=faults['mode'];faults['mode']=''
+   if mode=='http':
+    self.send_response(503);self.send_header('X-Bili-Trace-Id','bl-fixture-503');self.send_header('Content-Type','text/html');self.send_header('Content-Length','0');self.end_headers();return
+   if mode=='json':return self.response(200,b'<html>unavailable</html>','text/html')
+   if mode=='business':return self.response(200,{'code':-352,'message':'站点要求验证 token=fixture-secret-token','data':{}})
+  if p.path in ['/x/player/playurl','/x/player/wbi/playurl']:
+   with fault_lock:media_fault=faults['mode']=='media';faults['mode']='' if media_fault else faults['mode']
+   if media_fault:return self.response(200,{'code':0,'data':{'quality':32,'durl':[{'url':base+'/video.mp4?fail=1&token=fixture-secret-token','length':40000}]}})
   if p.path=='/sub':
    key=self.headers.get('Sec-WebSocket-Key','');accept=base64.b64encode(hashlib.sha1((key+'258EAFA5-E914-47DA-95CA-C5AB0DC85B11').encode()).digest()).decode()
    self.connection.sendall(('HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: '+accept+'\r\n\r\n').encode())
